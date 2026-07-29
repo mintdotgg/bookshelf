@@ -26,6 +26,7 @@ import {
   createLabelArt,
   createSpineCover,
 } from "./record-art";
+import { createSleeveModel } from "./sleeve-model";
 import {
   createLogBandLayout,
   smoothBandLevels,
@@ -345,7 +346,7 @@ export class RecordShelfEngine {
     let cursor = 0;
 
     this.recordsData.forEach((record, index) => {
-      const thickness = record.sleeveThickness ?? 0.085;
+      const thickness = record.sleeveThickness ?? 0.042;
       cursor += thickness * 0.5;
       const runtime = this.createRecord(record, index, cursor);
       this.runtimeRecords.push(runtime);
@@ -462,7 +463,7 @@ export class RecordShelfEngine {
     x: number,
   ): RuntimeRecord {
     const size = record.sleeveSize ?? 2.16;
-    const thickness = record.sleeveThickness ?? 0.085;
+    const thickness = record.sleeveThickness ?? 0.042;
     const width = size;
     const slot = new THREE.Group();
     slot.name = `recordSlot:${record.id}`;
@@ -480,29 +481,6 @@ export class RecordShelfEngine {
     inspectionIdle.name = `recordInspectionIdle:${record.id}`;
     content.add(inspectionIdle);
 
-    const sleeve = new THREE.Group();
-    sleeve.name = `recordSleeve:${record.id}`;
-    inspectionIdle.add(sleeve);
-
-    const jacketMaterial = new THREE.MeshPhysicalMaterial({
-      color: record.sleeveColor,
-      roughness: 0.78,
-      metalness: 0.01,
-      sheen: 0.3,
-      sheenColor: new THREE.Color(record.accent),
-      sheenRoughness: 0.82,
-      clearcoat: 0.06,
-      clearcoatRoughness: 0.72,
-    });
-    const jacket = new THREE.Mesh(
-      new RoundedBoxGeometry(width, size, thickness, 5, 0.028),
-      jacketMaterial,
-    );
-    jacket.name = "sleeveJacket";
-    jacket.castShadow = true;
-    jacket.receiveShadow = true;
-    sleeve.add(jacket);
-
     const frontTexture = toTexture(createFrontCover(record), this.renderer);
     const backTexture = toTexture(createBackCover(record), this.renderer);
     const spineTexture = toTexture(
@@ -513,58 +491,20 @@ export class RecordShelfEngine {
     const labelTexture = toTexture(createLabelArt(record, "A"), this.renderer);
     const textures = [frontTexture, backTexture, spineTexture, labelTexture];
 
-    const frontSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(width - 0.035, size - 0.035),
-      new THREE.MeshPhysicalMaterial({
-        map: frontTexture,
-        roughness: 0.68,
-        metalness: 0.015,
-        clearcoat: 0.075,
-        clearcoatRoughness: 0.55,
-      }),
-    );
-    frontSurface.name = "frontArtwork";
-    frontSurface.position.z = thickness * 0.5 + 0.008;
-    sleeve.add(frontSurface);
-
-    const backSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(width - 0.035, size - 0.035),
-      new THREE.MeshPhysicalMaterial({
-        map: backTexture,
-        roughness: 0.72,
-        metalness: 0.01,
-      }),
-    );
-    backSurface.name = "backArtwork";
-    backSurface.position.z = -thickness * 0.5 - 0.008;
-    backSurface.rotation.y = Math.PI;
-    sleeve.add(backSurface);
-
-    const spineSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(thickness - 0.012, size - 0.04),
-      new THREE.MeshPhysicalMaterial({
-        map: spineTexture,
-        roughness: 0.7,
-      }),
-    );
-    spineSurface.name = "spineArtwork";
-    spineSurface.rotation.y = -Math.PI / 2;
-    spineSurface.position.x = -width * 0.5 - 0.007;
-    sleeve.add(spineSurface);
-
-    const opening = new THREE.Mesh(
-      new THREE.TorusGeometry(size * 0.305, 0.012, 7, 56, Math.PI),
-      new THREE.MeshStandardMaterial({
-        color: "#161713",
-        roughness: 0.88,
-        transparent: true,
-        opacity: 0.42,
-      }),
-    );
-    opening.name = "sleeveOpening";
-    opening.rotation.z = Math.PI / 2;
-    opening.position.set(width * 0.5 - 0.01, 0, 0);
-    sleeve.add(opening);
+    const sleeveModel = createSleeveModel({
+      width,
+      height: size,
+      thickness,
+      color: record.sleeveColor,
+      accent: record.accent,
+      frontTexture,
+      backTexture,
+      spineTexture,
+    });
+    const sleeve = sleeveModel.root;
+    sleeve.name = `recordSleeve:${record.id}`;
+    inspectionIdle.add(sleeve);
+    const { frontSurface, backSurface } = sleeveModel;
 
     const pickProxy = new THREE.Mesh(
       new THREE.BoxGeometry(width, size, thickness + 0.08),

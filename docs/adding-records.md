@@ -30,7 +30,7 @@ Add an object to `recordCatalog`:
   motif: "signal-bloom",
 
   sleeveSize: 2.16,
-  sleeveThickness: 0.085,
+  sleeveThickness: 0.042,
 
   coverImage: recordAssetUrl("my-record", "cover.webp"),
   backCoverImage: recordAssetUrl("my-record", "back.webp"),
@@ -92,7 +92,7 @@ root-relative browser URLs yourself.
 | `ink` | Yes | Primary generated-art text and detail color. |
 | `motif` | Yes | Deterministic procedural design family. |
 | `sleeveSize` | No | Square sleeve width/height in scene units; defaults to `2.16`. |
-| `sleeveThickness` | No | Jacket thickness in scene units; defaults to `0.085`. |
+| `sleeveThickness` | No | Jacket thickness in scene units; defaults to `0.042`. |
 | `coverImage` | No | Browser URL for owned front-cover artwork. |
 | `backCoverImage` | No | Browser URL for owned back-cover artwork. |
 | `labelImage` | No | Browser URL for owned record-label artwork. |
@@ -105,7 +105,7 @@ root-relative browser URLs yourself.
 | `featured` | No | Catalog-level flag available for custom presentation rules. |
 
 Existing sleeves use sizes around `2.12`–`2.20` and thicknesses around
-`0.078`–`0.096`. The rotation lane adapts to catalog dimensions, but extreme
+`0.038`–`0.046`. The rotation lane adapts to catalog dimensions, but extreme
 values change shelf spacing and collision envelopes and must be retested. The
 shared `recordShelfGap` in `app/record-motion.ts` controls the visible air
 between sleeves; keep the engine and collision tests on that same value.

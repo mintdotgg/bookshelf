@@ -14,6 +14,8 @@ are authorized to distribute.
 - Browse with drag, wheel, arrow keys, Home, End, or the archive index.
 - See the full catalog together in an open walnut record cabinet with a
   deliberate air gap between every shelved sleeve.
+- Read the selected cover flat to the camera as a thin, open-sided cardstock
+  jacket with physical seams and paper edges.
 - Preserve a collision-safe retreat, rotate, shelve, extract, rotate, settle
   handoff between records.
 - Open every sleeve into a deterministic face-on inspection composition, then
@@ -105,6 +107,8 @@ state:
   choreography, diagnostics, and Three.js disposal.
 - `app/record-motion.ts` contains pure browse, focus, collision, vinyl, and
   tonearm pose functions.
+- `app/sleeve-model.ts` builds the layered cardstock jacket, pocket opening,
+  paper seams, and artwork surfaces.
 - `app/turntable-model.ts` builds the articulated hi-fi deck from named,
   replaceable functional parts.
 - `app/audio/playback-state.ts` contains the pure playback reducer.

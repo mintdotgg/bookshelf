@@ -216,8 +216,8 @@ test("ships eight valid, unique, rights-safe starter records", async () => {
     assert.ok(record.rpm === 33.333 || record.rpm === 45);
     assert.ok((record.sleeveSize ?? 0) >= 2.1);
     assert.ok((record.sleeveSize ?? 3) <= 2.25);
-    assert.ok((record.sleeveThickness ?? 0) >= 0.07);
-    assert.ok((record.sleeveThickness ?? 1) <= 0.11);
+    assert.ok((record.sleeveThickness ?? 0) >= 0.035);
+    assert.ok((record.sleeveThickness ?? 1) <= 0.05);
     assert.equal(record.tracks.length, 2);
 
     for (const [index, track] of record.tracks.entries()) {
@@ -557,7 +557,7 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
 
   let cursor = 0;
   const records = recordCatalog.map((record) => {
-    const thickness = record.sleeveThickness ?? 0.085;
+    const thickness = record.sleeveThickness ?? 0.042;
     cursor += thickness * 0.5;
     const runtime = {
       id: record.id,
@@ -817,7 +817,7 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
   );
 });
 
-test("inspection settles to an exact face-on sleeve pose", async () => {
+test("browse presentation and inspection settle to exact face-on sleeve poses", async () => {
   const {
     createRecordMotionLayout,
     focusedRecordPose,
@@ -829,11 +829,53 @@ test("inspection settles to an exact face-on sleeve pose", async () => {
   const presented = presentedRecordPose(layout);
   const focused = focusedRecordPose(1, layout, -1.08, 1.5, 1.03);
 
-  assert.notEqual(presented.yaw, 0);
+  assert.equal(presented.yaw, 0);
   assert.equal(focused.yaw, 0);
   assert.equal(focused.x, -1.08);
   assert.equal(focused.z, 1.5);
   assert.equal(focused.scale, 1.03);
+});
+
+test("sleeve model is a thin open cardstock pocket, not a rounded book", async () => {
+  const THREE = await import("three");
+  const { createSleeveModel } = await import("../app/sleeve-model.ts");
+  const textures = [new THREE.Texture(), new THREE.Texture(), new THREE.Texture()];
+  const model = createSleeveModel({
+    width: 2.16,
+    height: 2.16,
+    thickness: 0.042,
+    color: "#d9d0bb",
+    accent: "#176b70",
+    frontTexture: textures[0],
+    backTexture: textures[1],
+    spineTexture: textures[2],
+  });
+  const parts = new Set();
+  let meshCount = 0;
+  model.root.traverse((object) => {
+    if (object instanceof THREE.Mesh) {
+      meshCount += 1;
+      parts.add(object.name);
+    }
+  });
+
+  assert.equal(model.body.geometry.type, "BoxGeometry");
+  assert.ok(model.body.geometry.parameters.depth / 2.16 < 0.025);
+  assert.ok(model.frontSurface.material.roughness >= 0.8);
+  assert.ok(meshCount >= 10);
+  for (const part of [
+    "cardstockPocket",
+    "frontArtwork",
+    "backArtwork",
+    "spineArtwork",
+    "openPocketMouth",
+    "innerPaperLip",
+    "thumbNotch",
+    "thumbNotchRim",
+    "rearGlueFlap",
+  ]) {
+    assert.ok(parts.has(part), `missing physical sleeve part: ${part}`);
+  }
 });
 
 test("turntable model exposes articulated premium playback parts", async () => {

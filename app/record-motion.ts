@@ -33,12 +33,12 @@ export type BrowseMotionPhase =
   | "settle-next";
 
 export const shelvedYaw = Math.PI / 2;
-export const presentedYaw = Math.PI * 0.42;
+export const presentedYaw = 0;
 export const recordShelfGap = 0.22;
 
 const presentedX = -0.2;
 const shelvedZ = -0.64;
-const minimumPresentedZ = 0.62;
+const minimumPresentedZ = 1.12;
 const presentedScale = 1.02;
 const maximumFocusScale = 1.08;
 const collisionMargin = 0.045;
