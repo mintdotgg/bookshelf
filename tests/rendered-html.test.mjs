@@ -668,7 +668,9 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
 });
 
 test("cue choreography has deterministic endpoints and exact reverse paths", async () => {
-  const { cueMotionPose } = await import("../app/record-motion.ts");
+  const { cueMotionPose, reinsertProgressForExtraction } = await import(
+    "../app/record-motion.ts"
+  );
   const layout = {
     sleevedVinyl: {
       x: -1.2,
@@ -807,6 +809,37 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
     );
   }
 
+  const idleReveal = 0.88;
+  for (const extractionProgress of [idleReveal, 0.9, 0.97, 1]) {
+    const reinsertProgress = reinsertProgressForExtraction(
+      extractionProgress,
+      idleReveal,
+    );
+    const extraction = cueMotionPose(
+      "extract-vinyl",
+      extractionProgress,
+      layout,
+    );
+    const interruptedReturn = cueMotionPose(
+      "reinsert-vinyl",
+      reinsertProgress,
+      layout,
+      0,
+      idleReveal,
+    );
+    assertNumericObjectClose(
+      interruptedReturn.vinyl,
+      extraction.vinyl,
+      `interrupted extraction resumes without a jump at ${extractionProgress}`,
+      1e-6,
+    );
+  }
+  assertNumericObjectClose(
+    cueMotionPose("reinsert-vinyl", 1, layout, 0, idleReveal).vinyl,
+    cueMotionPose("extract-vinyl", idleReveal, layout).vinyl,
+    "non-returning stop settles at the staged sleeve reveal",
+  );
+
   assert.deepEqual(
     cueMotionPose("extract-vinyl", -10, layout).vinyl,
     layout.sleevedVinyl,
@@ -860,6 +893,7 @@ test("sleeve model is a thin open cardstock pocket, not a rounded book", async (
   });
 
   assert.equal(model.body.geometry.type, "BoxGeometry");
+  assert.equal(model.mouthFlex.name, "sleeveMouthFlex");
   assert.ok(model.body.geometry.parameters.depth / 2.16 < 0.025);
   assert.ok(model.frontSurface.material.roughness >= 0.8);
   assert.ok(meshCount >= 10);
@@ -876,6 +910,51 @@ test("sleeve model is a thin open cardstock pocket, not a rounded book", async (
   ]) {
     assert.ok(parts.has(part), `missing physical sleeve part: ${part}`);
   }
+});
+
+test("pressing has a true center bore with realistic spindle clearance", async () => {
+  const THREE = await import("three");
+  const {
+    createVinylBodyGeometry,
+    platterRecordCenterY,
+    spindleClearance,
+    vinylSpec,
+  } = await import("../app/turntable-model.ts");
+  const typicalRecordRadius = 2.16 * vinylSpec.discRadiusFactor;
+  const geometry = createVinylBodyGeometry(typicalRecordRadius);
+  const mesh = new THREE.Mesh(
+    geometry,
+    new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }),
+  );
+  mesh.updateMatrixWorld(true);
+  const raycaster = new THREE.Raycaster(
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, -1, 0),
+    0,
+    2,
+  );
+  assert.equal(
+    raycaster.intersectObject(mesh).length,
+    0,
+    "the pressing center is an actual opening",
+  );
+  raycaster.ray.origin.x = typicalRecordRadius * 0.5;
+  assert.ok(
+    raycaster.intersectObject(mesh).length > 0,
+    "the same ray intersects the playable pressing surface",
+  );
+
+  assert.ok(spindleClearance() > 0.002);
+  assert.ok(spindleClearance() < 0.004);
+  const spindleToDiscDiameter =
+    vinylSpec.spindleRadius / typicalRecordRadius;
+  assert.ok(spindleToDiscDiameter > 0.02);
+  assert.ok(spindleToDiscDiameter < 0.026);
+  const recordTop =
+    platterRecordCenterY() + vinylSpec.discThickness * 0.5;
+  const spindleTop = vinylSpec.spindleBaseY + vinylSpec.spindleHeight;
+  assert.ok(spindleTop - recordTop > 0.06);
+  assert.ok(spindleTop - recordTop < 0.09);
 });
 
 test("turntable model exposes articulated premium playback parts", async () => {
@@ -900,6 +979,10 @@ test("turntable model exposes articulated premium playback parts", async () => {
   requiredParts.forEach((name) => {
     assert.ok(model.root.getObjectByName(name), `missing ${name}`);
   });
+  assert.equal(
+    model.root.getObjectByName("spindle")?.geometry.type,
+    "LatheGeometry",
+  );
   assert.notEqual(model.platter, model.tonearmPivot);
   assert.equal(model.tonearmPivot.children.includes(model.tonearmLift), true);
   assert.equal(model.visualizerRings.length, 3);

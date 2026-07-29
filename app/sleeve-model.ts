@@ -13,6 +13,7 @@ export type SleeveModelOptions = {
 
 export type SleeveModel = {
   root: THREE.Group;
+  mouthFlex: THREE.Group;
   body: THREE.Mesh<THREE.BoxGeometry, THREE.MeshPhysicalMaterial>;
   frontSurface: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
   backSurface: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
@@ -145,14 +146,19 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
     metalness: 0,
     side: THREE.DoubleSide,
   });
+  const mouthFlex = new THREE.Group();
+  mouthFlex.name = "sleeveMouthFlex";
+  mouthFlex.position.x = width * 0.5;
+  root.add(mouthFlex);
+
   const mouth = new THREE.Mesh(
     new THREE.PlaneGeometry(thickness * 0.72, height - 0.055),
     mouthMaterial,
   );
   mouth.name = "openPocketMouth";
   mouth.rotation.y = Math.PI / 2;
-  mouth.position.x = width * 0.5 + 0.002;
-  root.add(mouth);
+  mouth.position.x = 0.002;
+  mouthFlex.add(mouth);
 
   const innerLip = new THREE.Mesh(
     new THREE.PlaneGeometry(thickness * 0.42, height - 0.095),
@@ -165,8 +171,8 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
   );
   innerLip.name = "innerPaperLip";
   innerLip.rotation.y = Math.PI / 2;
-  innerLip.position.set(width * 0.5 + 0.0035, 0, -thickness * 0.04);
-  root.add(innerLip);
+  innerLip.position.set(0.0035, 0, -thickness * 0.04);
+  mouthFlex.add(innerLip);
 
   const notchRadius = height * 0.064;
   const notch = new THREE.Mesh(
@@ -178,8 +184,8 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
     }),
   );
   notch.name = "thumbNotch";
-  notch.position.set(width * 0.5 - 0.004, 0, frontZ + 0.001);
-  root.add(notch);
+  notch.position.set(-0.004, 0, frontZ + 0.001);
+  mouthFlex.add(notch);
 
   const notchRim = new THREE.Mesh(
     new THREE.RingGeometry(
@@ -198,8 +204,8 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
     }),
   );
   notchRim.name = "thumbNotchRim";
-  notchRim.position.set(width * 0.5 - 0.004, 0, frontZ + 0.0015);
-  root.add(notchRim);
+  notchRim.position.set(-0.004, 0, frontZ + 0.0015);
+  mouthFlex.add(notchRim);
 
   const rearSeamMaterial = seamMaterial.clone();
   rearSeamMaterial.opacity = 0.42;
@@ -218,6 +224,7 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
 
   return {
     root,
+    mouthFlex,
     body,
     frontSurface,
     backSurface,

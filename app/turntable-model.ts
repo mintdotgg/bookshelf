@@ -1,6 +1,57 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
+/**
+ * Shared local-space dimensions for the pressing, center bore, and platter
+ * spindle. The pressing and turntable use the same scale on the platter, so
+ * these values preserve their mechanical clearance after presentation scaling.
+ */
+export const vinylSpec = {
+  discRadiusFactor: 0.385,
+  discThickness: 0.025,
+  centerHoleRadius: 0.0215,
+  spindleRadius: 0.019,
+  spindleHeight: 0.12,
+  spindleBaseY: 0.13,
+  platterMatTopY: 0.14,
+  platterClearance: 0.003,
+} as const;
+
+export function createVinylBodyGeometry(
+  outerRadius: number,
+  thickness = vinylSpec.discThickness,
+  centerHoleRadius = vinylSpec.centerHoleRadius,
+) {
+  const profile = new THREE.Shape();
+  profile.absarc(0, 0, outerRadius, 0, Math.PI * 2, false);
+  const centerBore = new THREE.Path();
+  centerBore.absarc(0, 0, centerHoleRadius, 0, Math.PI * 2, true);
+  profile.holes.push(centerBore);
+
+  const geometry = new THREE.ExtrudeGeometry(profile, {
+    depth: thickness,
+    steps: 1,
+    bevelEnabled: false,
+    curveSegments: 96,
+  });
+  geometry.rotateX(-Math.PI / 2);
+  geometry.translate(0, -thickness * 0.5, 0);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+export function platterRecordCenterY() {
+  return (
+    vinylSpec.platterMatTopY +
+    vinylSpec.platterClearance +
+    vinylSpec.discThickness * 0.5
+  );
+}
+
+export function spindleClearance() {
+  return vinylSpec.centerHoleRadius - vinylSpec.spindleRadius;
+}
+
 export type TurntableModel = {
   root: THREE.Group;
   reveal: THREE.Group;
@@ -274,26 +325,33 @@ export function createTurntableModel(): TurntableModel {
   strobeDots.instanceMatrix.needsUpdate = true;
   platter.add(strobeDots);
 
-  const spindle = cylinder(
-    "spindle",
-    0.035,
-    0.035,
-    0.3,
-    32,
+  const spindleProfile = [
+    new THREE.Vector2(vinylSpec.spindleRadius * 0.86, 0),
+    new THREE.Vector2(vinylSpec.spindleRadius, 0.012),
+    new THREE.Vector2(vinylSpec.spindleRadius, 0.083),
+    new THREE.Vector2(vinylSpec.spindleRadius * 0.82, 0.103),
+    new THREE.Vector2(vinylSpec.spindleRadius * 0.42, 0.116),
+    new THREE.Vector2(0, vinylSpec.spindleHeight),
+  ];
+  const spindle = new THREE.Mesh(
+    new THREE.LatheGeometry(spindleProfile, 40),
     brushedMetal,
   );
-  spindle.position.y = 0.23;
+  spindle.name = "spindle";
+  spindle.position.y = vinylSpec.spindleBaseY;
+  spindle.castShadow = true;
+  spindle.receiveShadow = true;
   platter.add(spindle);
 
   const spindleCollar = cylinder(
     "spindleCollar",
-    0.095,
-    0.095,
-    0.026,
+    0.056,
+    0.061,
+    0.018,
     48,
     darkMetal,
   );
-  spindleCollar.position.y = 0.17;
+  spindleCollar.position.y = vinylSpec.platterMatTopY + 0.002;
   platter.add(spindleCollar);
 
   const pitchRail = rounded(

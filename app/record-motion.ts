@@ -61,6 +61,17 @@ function smooth(value: number) {
   return t * t * (3 - 2 * t);
 }
 
+export function reinsertProgressForExtraction(
+  extractionProgress: number,
+  targetReveal: number,
+) {
+  const target = clamp01(targetReveal);
+  if (target >= 1) return 1;
+  return clamp01(
+    (1 - clamp01(extractionProgress)) / Math.max(1e-6, 1 - target),
+  );
+}
+
 function smoother(value: number) {
   const t = clamp01(value);
   return t * t * t * (t * (t * 6 - 15) + 10);
@@ -425,6 +436,7 @@ export function cueMotionPose(
   progress: number,
   layout: CueMotionLayout,
   grooveProgress = progress,
+  reinsertTarget = 0,
 ): CueMotionPose {
   const value = clamp01(progress);
   const groove = clamp01(grooveProgress);
@@ -478,7 +490,10 @@ export function cueMotionPose(
       };
     case "reinsert-vinyl":
       return {
-        vinyl: vinylExtractionPose(1 - value, layout),
+        vinyl: vinylExtractionPose(
+          lerp(1, clamp01(reinsertTarget), value),
+          layout,
+        ),
         tonearm: rest,
         platterSpeed: 0,
         stylusContact: 0,

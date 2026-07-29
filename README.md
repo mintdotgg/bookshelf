@@ -18,14 +18,16 @@ are authorized to distribute.
   jacket with physical seams and paper edges.
 - Preserve a collision-safe retreat, rotate, shelve, extract, rotate, settle
   handoff between records.
-- Open every sleeve into a deterministic face-on inspection composition, then
-  orbit, pan, zoom, or restore the exact reset view.
+- Open every sleeve into a deterministic face-on inspection composition while
+  the pocket mouth flexes and the pressing slides into its staged position.
 - Replace generated front, back, and label art independently; failed optional
   images fall back to deterministic procedural artwork.
 - Load one preview source at a time through a reusable media element and Web
   Audio analyser.
 - Remove the vinyl, move it to the platter, lower the tonearm, follow the groove
   while playing, and reverse the sequence on stop.
+- Return the pressing through the same sleeve path before the closed jacket
+  moves back into the archive.
 - Start playback from an accessible control anchored to the exposed record
   label, then hand off to the persistent transport controls.
 - Pause, seek, change tracks, adjust volume, or return to the shelf without
@@ -110,7 +112,7 @@ state:
 - `app/sleeve-model.ts` builds the layered cardstock jacket, pocket opening,
   paper seams, and artwork surfaces.
 - `app/turntable-model.ts` builds the articulated hi-fi deck from named,
-  replaceable functional parts.
+  replaceable functional parts and owns the shared pressing/spindle dimensions.
 - `app/audio/playback-state.ts` contains the pure playback reducer.
 - `app/audio/VinylAudioController.ts` owns one `HTMLAudioElement` and its lazy
   Web Audio source, gain, and analyser graph.

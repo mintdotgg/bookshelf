@@ -105,7 +105,10 @@ export function VinylLibrary() {
     [selectedRecord, selectedTrackId],
   );
   const isFocused = sceneMode !== "browse";
+  const isSceneTransition =
+    sceneMode === "focusing" || sceneMode === "returning";
   const isBusy =
+    isSceneTransition ||
     playback.mode === "loading" ||
     playback.mode === "cueing" ||
     playback.mode === "stopping";

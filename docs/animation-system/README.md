@@ -64,9 +64,10 @@ scene
 │       └── content                    browse/focus x, z, yaw, scale
 │           └── inspectionIdle         reduced-motion-aware idle transform
 │               ├── sleeve             jacket and front/back/spine surfaces
+│               │   └── sleeveMouthFlex open edge, inner lip, and thumb notch
 │               └── pickProxy          one invisible raycast box
 ├── vinyl                              independently transported pressing
-│   ├── disc, label, spindle hole
+│   ├── annular disc, label, and true center bore
 │   ├── groove and optional marbling details
 │   └── reactive glow
 └── turntable
@@ -114,7 +115,7 @@ machines.
 stateDiagram-v2
     [*] --> browse
     browse --> focusing: centered record is opened
-    focusing --> inspect: focusProgress reaches 1
+    focusing --> inspect: focusProgress and sleeveRevealProgress reach 1
     inspect --> returning: return requested and vinyl is home
     returning --> browse: focusProgress reaches 0
 ```
@@ -191,11 +192,13 @@ completed its browse handoff.
 
 ## Focus and return
 
-Focus takes 500 ms and return takes 380 ms under ordinary motion. Focus first
-clears neighboring sleeves, then moves into the inspection composition and
-scales. Its final yaw is exactly zero and the camera optical axis stays parallel
-to the jacket normal, so the sleeve is face-on even though the composition
-places it left of center. The camera uses exponential, frame-rate-independent
+Focus takes 500 ms, then the sleeve reveal takes 720 ms under ordinary motion.
+Focus first clears neighboring sleeves, moves into the inspection composition,
+and scales. Once the camera settles, `sleeveRevealProgress` flexes the mouth and
+slides the pressing from fully enclosed to the staged label-visible pose. Its
+final jacket yaw is exactly zero and the camera optical axis stays parallel to
+the jacket normal, so the sleeve is face-on even though the composition places
+it left of center. The camera uses exponential, frame-rate-independent
 smoothing and a view offset on desktop to reserve distinct sleeve, vinyl,
 turntable, player, and album-panel zones.
 
@@ -203,13 +206,16 @@ Mobile uses a centered, smaller sleeve pose and wider camera. The compact
 details/player layout takes priority and the turntable stage is scaled at the
 engine’s 760 px mobile breakpoint.
 
-Return follows the current live `focusProgress` toward zero. It does not reset
-the record or camera to a guessed start pose.
+An idle return first reverses the 620 ms sleeve reveal until the pressing is
+fully enclosed, then follows the current live `focusProgress` toward zero over
+380 ms. A return from cue/play completes the tonearm, platter, transport, and
+reinsertion path before camera return begins. Neither route resets the record
+or camera to a guessed start pose.
 
 ## Cue choreography
 
 Cue poses are pure samples from `cueMotionPose(phase, progress, layout,
-grooveProgress)`.
+grooveProgress, reinsertTarget)`.
 
 ```mermaid
 flowchart LR
@@ -227,11 +233,12 @@ tonearm first rotates over the selected groove and then lowers; the
 `onNeedleContact` callback starts audible playback only when the stylus reaches
 contact.
 
-In idle inspection the vinyl is already staged far enough out of the sleeve for
-its center label to remain visible. `RecordShelfEngine` projects that label
-position after the single render and updates one semantic HTML play button
-imperatively, avoiding frame-level React state. Cueing continues from the live
-staged pose rather than snapping the vinyl back into the jacket.
+Opening inspection animates the vinyl from fully enclosed to a staged position
+far enough out of the sleeve for its center label to remain visible.
+`RecordShelfEngine` projects that label position after the single render and
+updates one semantic HTML play button imperatively, avoiding frame-level React
+state. Cueing continues from the live staged pose rather than snapping the
+vinyl back into the jacket.
 
 During playback, `currentTime / duration` maps to `grooveProgress`, which moves
 the tonearm from lead-in to runout. Seeking raises the arm visually and updates
@@ -242,11 +249,28 @@ Stop reverses from live progress:
 
 - while lowering or playing, it changes to `raise-tonearm`;
 - while moving to the turntable, it reverses into `return-to-sleeve`;
-- while extracting, it reverses into `reinsert-vinyl`.
+- while extracting, `reinsertProgressForExtraction()` maps the live pose into
+  `reinsert-vinyl` without a discontinuity.
 
-After reinsertion, the engine fires `onVinylReturned` once. A queued track may
-then load, or a pending return may begin. This prevents teleports and keeps
-repeated commands safe.
+Stopping while remaining in inspection targets the staged reveal; returning to
+the archive targets full enclosure. After reinsertion, the engine fires
+`onVinylReturned` once. A queued track may then load, or a pending return may
+begin. This prevents teleports and keeps repeated commands safe.
+
+## Pressing and spindle fit
+
+`app/turntable-model.ts` owns one local-space dimensional contract shared by
+the pressing and platter:
+
+- the pressing is an extruded annulus with a real center bore;
+- the label is a ring and does not paint over the bore;
+- the lathed spindle is narrower than the bore with a small positive clearance;
+- its rounded tip extends only slightly above the label;
+- the record center height derives from the platter-mat top, record thickness,
+  and a small physical clearance rather than a world-space magic number.
+
+Because the pressing and turntable receive the same platter scale, these
+relationships remain intact at every responsive desktop presentation scale.
 
 ## Audio and reactive visuals
 
@@ -327,7 +351,7 @@ The returned snapshot contains:
 
 - `sceneMode`, `playbackMode`, browse `motionPhase`, and `cuePhase`;
 - active and selected indices plus record count;
-- cue progress;
+- cue progress and sleeve reveal progress;
 - draw calls, triangles, geometries, textures, and pixel ratio;
 - collision rejects, last rejected pair, and current collision;
 - low, mid, high, and aggregate audio levels;
@@ -345,7 +369,7 @@ Diagnostics aid automated QA but do not replace browser profiling.
 The engine reads `prefers-reduced-motion` at startup. When enabled:
 
 - each browse phase uses 45% of its normal duration with a 55 ms floor;
-- focus and return use 80 ms;
+- focus, sleeve open, sleeve close, and return use 80–100 ms;
 - each cue phase uses 90 ms;
 - shelf and camera response becomes stronger;
 - inspection idle lift and rotation are disabled.

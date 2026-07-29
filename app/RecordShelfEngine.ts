@@ -8,6 +8,7 @@ import {
   createRecordMotionLayout,
   cueMotionPose,
   focusedRecordPose,
+  reinsertProgressForExtraction,
   presentedRecordPose,
   recordShelfGap,
   recordFootprintsOverlap,
@@ -33,7 +34,12 @@ import {
   writeBandLevels,
   type AudioBandLayout,
 } from "./audio/audio-visualizer";
-import { createTurntableModel } from "./turntable-model";
+import {
+  createVinylBodyGeometry,
+  createTurntableModel,
+  platterRecordCenterY,
+  vinylSpec,
+} from "./turntable-model";
 
 export type SceneMode = "browse" | "focusing" | "inspect" | "returning";
 export type VisualPlaybackMode =
@@ -69,11 +75,12 @@ type RuntimeRecord = {
   content: THREE.Group;
   inspectionIdle: THREE.Group;
   sleeve: THREE.Group;
+  sleeveMouth: THREE.Group;
   frontSurface: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
   backSurface: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
   vinyl: THREE.Group;
-  vinylDisc: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshPhysicalMaterial>;
-  vinylLabel: THREE.Mesh<THREE.CylinderGeometry, THREE.MeshStandardMaterial>;
+  vinylDisc: THREE.Mesh<THREE.ExtrudeGeometry, THREE.MeshPhysicalMaterial>;
+  vinylLabel: THREE.Mesh<THREE.RingGeometry, THREE.MeshStandardMaterial>;
   vinylGlow: THREE.Mesh<THREE.RingGeometry, THREE.MeshBasicMaterial>;
   pickProxy: THREE.Mesh;
   x: number;
@@ -97,6 +104,8 @@ const browseCamera = new THREE.Vector3(0, 1.55, 8.2);
 const browseTarget = new THREE.Vector3(0, 1.32, 0.1);
 const focusInDuration = 0.5;
 const focusOutDuration = 0.38;
+const sleeveOpenDuration = 0.72;
+const sleeveCloseDuration = 0.62;
 const desktopFocusX = -1.08;
 const desktopFocusZ = 1.5;
 const desktopFocusScale = 0.84;
@@ -200,6 +209,7 @@ export class RecordShelfEngine {
   private scrollIndex = 0;
   private targetScrollIndex = 0;
   private focusProgress = 0;
+  private sleeveRevealProgress = 0;
   private lastInputTime = 0;
   private pointerDown = false;
   private pointerId: number | null = null;
@@ -504,7 +514,11 @@ export class RecordShelfEngine {
     const sleeve = sleeveModel.root;
     sleeve.name = `recordSleeve:${record.id}`;
     inspectionIdle.add(sleeve);
-    const { frontSurface, backSurface } = sleeveModel;
+    const {
+      frontSurface,
+      backSurface,
+      mouthFlex: sleeveMouth,
+    } = sleeveModel;
 
     const pickProxy = new THREE.Mesh(
       new THREE.BoxGeometry(width, size, thickness + 0.08),
@@ -524,7 +538,7 @@ export class RecordShelfEngine {
     vinyl.visible = false;
 
     const vinylDisc = new THREE.Mesh(
-      new THREE.CylinderGeometry(size * 0.385, size * 0.385, 0.025, 96, 1),
+      createVinylBodyGeometry(size * vinylSpec.discRadiusFactor),
       new THREE.MeshPhysicalMaterial({
         color: record.vinylColor,
         roughness: 0.28,
@@ -541,14 +555,21 @@ export class RecordShelfEngine {
     vinyl.add(vinylDisc);
 
     const vinylLabel = new THREE.Mesh(
-      new THREE.CylinderGeometry(size * 0.115, size * 0.115, 0.031, 64),
+      new THREE.RingGeometry(
+        vinylSpec.centerHoleRadius + 0.002,
+        size * 0.115,
+        72,
+      ),
       new THREE.MeshStandardMaterial({
         map: labelTexture,
         roughness: 0.7,
         metalness: 0,
+        side: THREE.DoubleSide,
       }),
     );
     vinylLabel.name = "recordLabel";
+    vinylLabel.rotation.x = -Math.PI / 2;
+    vinylLabel.position.y = vinylSpec.discThickness * 0.5 + 0.001;
     vinyl.add(vinylLabel);
 
     for (let groove = 0; groove < 11; groove += 1) {
@@ -592,11 +613,23 @@ export class RecordShelfEngine {
       }
     }
 
-    const spindleHole = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.022, 0.022, 0.05, 24),
-      new THREE.MeshBasicMaterial({ color: "#121310" }),
+    const centerBoreEdge = new THREE.Mesh(
+      new THREE.TorusGeometry(
+        vinylSpec.centerHoleRadius,
+        0.0014,
+        6,
+        48,
+      ),
+      new THREE.MeshStandardMaterial({
+        color: "#0c0d0b",
+        roughness: 0.82,
+        metalness: 0.04,
+      }),
     );
-    vinyl.add(spindleHole);
+    centerBoreEdge.name = "centerBoreEdge";
+    centerBoreEdge.rotation.x = Math.PI / 2;
+    centerBoreEdge.position.y = vinylSpec.discThickness * 0.5;
+    vinyl.add(centerBoreEdge);
 
     const vinylGlow = new THREE.Mesh(
       new THREE.RingGeometry(size * 0.4, size * 0.43, 96),
@@ -619,6 +652,7 @@ export class RecordShelfEngine {
       content,
       inspectionIdle,
       sleeve,
+      sleeveMouth,
       frontSurface,
       backSurface,
       vinyl,
@@ -875,6 +909,7 @@ export class RecordShelfEngine {
     this.pendingFocusIndex = null;
     this.selectedIndex = index;
     this.focusProgress = 0;
+    this.sleeveRevealProgress = 0;
     this.mode = "focusing";
     this.runtimeRecords.forEach((record) => {
       record.targetHover = 0;
@@ -1005,30 +1040,60 @@ export class RecordShelfEngine {
       );
       this.updateFocusCamera(delta);
       if (this.focusProgress >= 1) {
+        this.sleeveRevealProgress = clamp(
+          this.sleeveRevealProgress +
+            delta / (this.reducedMotion ? 0.1 : sleeveOpenDuration),
+          0,
+          1,
+        );
+      }
+      if (this.focusProgress >= 1 && this.sleeveRevealProgress >= 1) {
         this.mode = "inspect";
         this.controls.enabled = true;
         this.controls.target.copy(this.focusCameraTarget);
         this.callbacks.onMode(this.mode, this.selectedIndex);
         if (this.selectedIndex !== null) {
           this.callbacks.onStatus(
-            `Inspecting ${this.runtimeRecords[this.selectedIndex].data.shortTitle}`,
+            `${this.runtimeRecords[this.selectedIndex].data.shortTitle} sleeve open`,
           );
         }
       }
     } else if (this.mode === "returning") {
       this.controls.enabled = false;
-      this.focusProgress = clamp(
-        this.focusProgress -
-          delta / (this.reducedMotion ? 0.08 : focusOutDuration),
-        0,
-        1,
-      );
-      this.applyFocusViewOffset(easeOutCubic(this.focusProgress));
-      this.camera.position.lerp(
-        this.responsiveBrowseCamera,
-        1 - Math.exp(-(this.reducedMotion ? 24 : 14) * delta),
-      );
-      this.camera.lookAt(this.responsiveBrowseTarget);
+      const previousSleeveReveal = this.sleeveRevealProgress;
+      if (previousSleeveReveal > 0) {
+        this.sleeveRevealProgress = clamp(
+          previousSleeveReveal -
+            delta / (this.reducedMotion ? 0.1 : sleeveCloseDuration),
+          0,
+          1,
+        );
+        this.applyFocusViewOffset(1);
+        this.camera.position.lerp(
+          this.focusCameraPosition,
+          1 - Math.exp(-(this.reducedMotion ? 24 : 14) * delta),
+        );
+        this.camera.lookAt(this.focusCameraTarget);
+        if (
+          previousSleeveReveal > 0 &&
+          this.sleeveRevealProgress <= 0
+        ) {
+          this.callbacks.onStatus("Returning the closed sleeve to the archive");
+        }
+      } else {
+        this.focusProgress = clamp(
+          this.focusProgress -
+            delta / (this.reducedMotion ? 0.08 : focusOutDuration),
+          0,
+          1,
+        );
+        this.applyFocusViewOffset(easeOutCubic(this.focusProgress));
+        this.camera.position.lerp(
+          this.responsiveBrowseCamera,
+          1 - Math.exp(-(this.reducedMotion ? 24 : 14) * delta),
+        );
+        this.camera.lookAt(this.responsiveBrowseTarget);
+      }
       if (this.focusProgress <= 0) {
         if (this.selectedIndex !== null) {
           this.commitRecordPose(
@@ -1103,6 +1168,10 @@ export class RecordShelfEngine {
       record.idleAmount = damp(record.idleAmount, idleTarget, 5, delta);
       record.inspectionIdle.position.y = 0;
       record.inspectionIdle.rotation.set(0, 0, 0);
+      const mouthOpen = isSelected ? smooth(this.sleeveRevealProgress) : 0;
+      record.sleeveMouth.scale.z = 1 + mouthOpen * 0.72;
+      record.sleeveMouth.rotation.y = -mouthOpen * 0.014;
+      record.sleeveMouth.position.z = mouthOpen * 0.0035;
 
       if (!isSelected) record.vinyl.visible = false;
       const hoverScale = 1 + record.hover * 0.008;
@@ -1153,7 +1222,7 @@ export class RecordShelfEngine {
       },
       platterVinyl: {
         x: platterWorld.x,
-        y: platterWorld.y + 0.13,
+        y: platterWorld.y + platterRecordCenterY() * turntableScale,
         z: platterWorld.z,
         pitch: 0,
         yaw: 0,
@@ -1174,11 +1243,12 @@ export class RecordShelfEngine {
     const selected = this.runtimeRecords[this.selectedIndex];
 
     if (this.cuePhase === null) {
-      selected.vinyl.visible = this.mode === "inspect";
+      selected.vinyl.visible =
+        this.mode !== "browse" && this.sleeveRevealProgress > 0;
       if (selected.vinyl.visible) {
         const peek = cueMotionPose(
           "extract-vinyl",
-          idleVinylReveal,
+          idleVinylReveal * this.sleeveRevealProgress,
           layout,
           0,
         );
@@ -1213,12 +1283,19 @@ export class RecordShelfEngine {
       ? 0.09
       : cueDurations[this.cuePhase as Exclude<CueMotionPhase, "playing">];
     this.cueProgress = clamp(this.cueProgress + delta / duration, 0, 1);
+    const reinsertTarget = this.returnAfterVinyl ? 0 : idleVinylReveal;
     pose = cueMotionPose(
       this.cuePhase,
       this.cueProgress,
       layout,
       this.grooveProgress,
+      reinsertTarget,
     );
+    if (this.cuePhase === "reinsert-vinyl") {
+      this.sleeveRevealProgress = this.returnAfterVinyl
+        ? 1 - smooth(this.cueProgress)
+        : 1;
+    }
     this.applyCuePose(selected, pose, delta);
     if (this.cueProgress < 1) return;
 
@@ -1246,7 +1323,8 @@ export class RecordShelfEngine {
         break;
       case "reinsert-vinyl":
         this.cuePhase = null;
-        selected.vinyl.visible = false;
+        selected.vinyl.visible = !this.returnAfterVinyl;
+        this.sleeveRevealProgress = this.returnAfterVinyl ? 0 : 1;
         this.playbackMode = "idle";
         this.cueContactFired = false;
         if (!this.vinylReturnFired) {
@@ -1596,6 +1674,7 @@ export class RecordShelfEngine {
     this.controls.enabled = false;
     this.cuePhase = "extract-vinyl";
     this.cueProgress = idleVinylReveal;
+    this.sleeveRevealProgress = 1;
     this.grooveProgress = clamp(grooveProgress, 0, 1);
     this.cueContactFired = false;
     this.vinylReturnFired = false;
@@ -1625,7 +1704,10 @@ export class RecordShelfEngine {
       this.cueProgress = 1 - this.cueProgress;
       this.cuePhase = "return-to-sleeve";
     } else if (this.cuePhase === "extract-vinyl") {
-      this.cueProgress = 1 - this.cueProgress;
+      this.cueProgress = reinsertProgressForExtraction(
+        this.cueProgress,
+        this.returnAfterVinyl ? 0 : idleVinylReveal,
+      );
       this.cuePhase = "reinsert-vinyl";
     }
   }
@@ -1676,7 +1758,11 @@ export class RecordShelfEngine {
     this.controls.enabled = false;
     this.mode = "returning";
     this.callbacks.onMode(this.mode, this.selectedIndex);
-    this.callbacks.onStatus("Returning the album to the archive");
+    this.callbacks.onStatus(
+      this.sleeveRevealProgress > 0
+        ? "Sliding the pressing into its sleeve"
+        : "Returning the album to the archive",
+    );
   }
 
   resetFocusView() {
@@ -1706,6 +1792,7 @@ export class RecordShelfEngine {
       motionPhase: this.browseMotionPhase,
       cuePhase: this.cuePhase,
       cueProgress: this.cueProgress,
+      sleeveRevealProgress: this.sleeveRevealProgress,
       collisionRejects: this.collisionRejects,
       lastCollisionPair: this.lastCollisionPair,
       currentCollision: this.findAnyCollision(),
