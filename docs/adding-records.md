@@ -106,7 +106,9 @@ root-relative browser URLs yourself.
 
 Existing sleeves use sizes around `2.12`–`2.20` and thicknesses around
 `0.078`–`0.096`. The rotation lane adapts to catalog dimensions, but extreme
-values change shelf spacing and collision envelopes and must be retested.
+values change shelf spacing and collision envelopes and must be retested. The
+shared `recordShelfGap` in `app/record-motion.ts` controls the visible air
+between sleeves; keep the engine and collision tests on that same value.
 
 Available motifs are:
 

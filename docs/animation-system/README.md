@@ -280,6 +280,11 @@ other record. An overlapping pose is rejected and recorded in diagnostics.
 Pure tests sample all six browse phases, desktop/mobile focus routes, and cue
 poses without requiring WebGL.
 
+Shelved slots share the exported `recordShelfGap`, currently `0.22` scene
+units. The presented sleeve offsets slightly left so the full lineup remains
+readable, but that lateral move occurs only in the forward rotation lane; the
+sleeve returns to its slot center before entering the shelf row.
+
 If catalog sizes move outside the ranges in `docs/adding-records.md`, rerun the
 motion tests before changing phase constants or the collision margin.
 

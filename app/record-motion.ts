@@ -33,23 +33,23 @@ export type BrowseMotionPhase =
   | "settle-next";
 
 export const shelvedYaw = Math.PI / 2;
-export const presentedYaw = 0;
+export const presentedYaw = Math.PI * 0.42;
+export const recordShelfGap = 0.22;
 
+const presentedX = -0.2;
 const shelvedZ = -0.64;
-// Square sleeves need enough front clearance to keep the face-on pressing
-// beyond the deepest shelved sleeve throughout the handoff.
-const presentedZ = 0.62;
-const presentedScale = 1.035;
+const minimumPresentedZ = 0.62;
+const presentedScale = 1.02;
 const maximumFocusScale = 1.08;
-const collisionMargin = 0.035;
+const collisionMargin = 0.045;
 
 export const browsePhaseDuration: Record<BrowseMotionPhase, number> = {
-  "retreat-current": 0.11,
-  "turn-current": 0.14,
-  "shelve-current": 0.13,
-  "extract-next": 0.13,
-  "turn-next": 0.14,
-  "settle-next": 0.11,
+  "retreat-current": 0.18,
+  "turn-current": 0.22,
+  "shelve-current": 0.2,
+  "extract-next": 0.2,
+  "turn-next": 0.22,
+  "settle-next": 0.24,
 };
 
 function clamp01(value: number) {
@@ -59,6 +59,11 @@ function clamp01(value: number) {
 function smooth(value: number) {
   const t = clamp01(value);
   return t * t * (3 - 2 * t);
+}
+
+function smoother(value: number) {
+  const t = clamp01(value);
+  return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 function lerp(start: number, end: number, amount: number) {
@@ -72,6 +77,16 @@ export function createRecordMotionLayout(
     (maximum, record) => Math.max(maximum, record.width * 0.5),
     0,
   );
+  const maxPresentedHalfDepth = records.reduce(
+    (maximum, record) =>
+      Math.max(
+        maximum,
+        (record.width * 0.5 * Math.abs(Math.sin(presentedYaw)) +
+          record.thickness * 0.5 * Math.abs(Math.cos(presentedYaw))) *
+          presentedScale,
+      ),
+    0,
+  );
   const maxRotationRadius = records.reduce(
     (maximum, record) =>
       Math.max(
@@ -82,15 +97,25 @@ export function createRecordMotionLayout(
       ),
     0,
   );
+  const presentedZ = Math.max(
+    minimumPresentedZ,
+    shelvedZ +
+      maxShelvedHalfDepth +
+      maxPresentedHalfDepth +
+      collisionMargin * 2,
+  );
 
   return {
     shelvedZ,
     presentedZ,
     rotationLaneZ:
-      shelvedZ +
-      maxShelvedHalfDepth +
-      maxRotationRadius +
-      collisionMargin,
+      Math.max(
+        shelvedZ +
+          maxShelvedHalfDepth +
+          maxRotationRadius +
+          collisionMargin,
+        presentedZ + 0.14,
+      ),
     presentedScale,
     collisionMargin,
   };
@@ -107,7 +132,7 @@ export function shelvedRecordPose(layout: RecordMotionLayout): RecordPose {
 
 export function presentedRecordPose(layout: RecordMotionLayout): RecordPose {
   return {
-    x: 0,
+    x: presentedX,
     z: layout.presentedZ,
     yaw: presentedYaw,
     scale: layout.presentedScale,
@@ -119,19 +144,19 @@ export function browseRecordMotionPose(
   progress: number,
   layout: RecordMotionLayout,
 ): RecordPose {
-  const t = smooth(progress);
+  const t = smoother(progress);
 
   switch (phase) {
     case "retreat-current":
       return {
-        x: 0,
+        x: presentedX,
         z: lerp(layout.presentedZ, layout.rotationLaneZ, t),
         yaw: presentedYaw,
         scale: lerp(layout.presentedScale, 1, t),
       };
     case "turn-current":
       return {
-        x: 0,
+        x: lerp(presentedX, 0, t),
         z: layout.rotationLaneZ,
         yaw: lerp(presentedYaw, shelvedYaw, t),
         scale: 1,
@@ -152,14 +177,14 @@ export function browseRecordMotionPose(
       };
     case "turn-next":
       return {
-        x: 0,
+        x: lerp(0, presentedX, t),
         z: layout.rotationLaneZ,
         yaw: lerp(shelvedYaw, presentedYaw, t),
         scale: 1,
       };
     case "settle-next":
       return {
-        x: 0,
+        x: presentedX,
         z: lerp(layout.rotationLaneZ, layout.presentedZ, t),
         yaw: presentedYaw,
         scale: lerp(1, layout.presentedScale, t),
@@ -181,9 +206,9 @@ export function focusedRecordPose(
   );
 
   return {
-    x: lerp(0, focusX, presentationProgress),
+    x: lerp(presentedX, focusX, presentationProgress),
     z: lerp(layout.presentedZ, focusZ, clearanceProgress),
-    yaw: presentedYaw,
+    yaw: lerp(presentedYaw, 0, presentationProgress),
     scale: lerp(
       layout.presentedScale,
       focusScale,

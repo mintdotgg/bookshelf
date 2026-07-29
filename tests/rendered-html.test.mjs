@@ -546,6 +546,7 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
       browseRecordMotionPose,
       createRecordMotionLayout,
       presentedRecordPose,
+      recordShelfGap,
       recordFootprintsOverlap,
       shelvedRecordPose,
     },
@@ -554,7 +555,6 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
     import("../app/record-motion.ts"),
   ]);
 
-  const gap = 0.055;
   let cursor = 0;
   const records = recordCatalog.map((record) => {
     const thickness = record.sleeveThickness ?? 0.085;
@@ -565,7 +565,7 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
       width: record.sleeveSize ?? 2.16,
       thickness,
     };
-    cursor += thickness * 0.5 + gap;
+    cursor += thickness * 0.5 + recordShelfGap;
     return runtime;
   });
   const layout = createRecordMotionLayout(records);

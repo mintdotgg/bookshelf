@@ -9,6 +9,7 @@ import {
   cueMotionPose,
   focusedRecordPose,
   presentedRecordPose,
+  recordShelfGap,
   recordFootprintsOverlap,
   shelvedRecordPose,
   type BrowseMotionPhase,
@@ -83,7 +84,7 @@ export type VinylLibraryDiagnostics = ReturnType<
 
 const clamp = THREE.MathUtils.clamp;
 const shelfTop = 0.26;
-const browseCamera = new THREE.Vector3(0, 1.55, 7.25);
+const browseCamera = new THREE.Vector3(0, 1.55, 8.2);
 const browseTarget = new THREE.Vector3(0, 1.32, 0.1);
 const focusInDuration = 0.5;
 const focusOutDuration = 0.38;
@@ -199,6 +200,7 @@ export class RecordShelfEngine {
   private focusCameraPosition = new THREE.Vector3();
   private focusCameraTarget = new THREE.Vector3();
   private responsiveBrowseCamera = browseCamera.clone();
+  private responsiveBrowseTarget = browseTarget.clone();
   private lastTimestamp = 0;
   private lastDiagnosticsAt = 0;
   private isDisposed = false;
@@ -332,7 +334,6 @@ export class RecordShelfEngine {
 
   private createRecords() {
     let cursor = 0;
-    const gap = 0.055;
 
     this.recordsData.forEach((record, index) => {
       const thickness = record.sleeveThickness ?? 0.085;
@@ -341,7 +342,7 @@ export class RecordShelfEngine {
       this.runtimeRecords.push(runtime);
       this.shelfGroup.add(runtime.slot);
       this.scene.add(runtime.vinyl);
-      cursor += thickness * 0.5 + gap;
+      cursor += thickness * 0.5 + recordShelfGap;
 
       if (record.coverImage) {
         void this.loadSurfaceTexture(
@@ -381,7 +382,7 @@ export class RecordShelfEngine {
       );
     });
 
-    const shelfWidth = Math.max(8.8, cursor + 7.6);
+    const shelfWidth = Math.max(6.2, cursor + 3.2);
     const shelfMaterial = new THREE.MeshPhysicalMaterial({
       color: "#553a2d",
       roughness: 0.6,
@@ -418,6 +419,32 @@ export class RecordShelfEngine {
     backRail.position.set(cursor * 0.5, shelfTop + 0.1, -0.76);
     backRail.castShadow = true;
     this.shelfFurniture.add(backRail);
+
+    const topShelf = new THREE.Mesh(
+      new RoundedBoxGeometry(shelfWidth, 0.16, 1.68, 5, 0.04),
+      shelfMaterial,
+    );
+    topShelf.name = "archiveShelfTop";
+    topShelf.position.set(cursor * 0.5, shelfTop + 2.48, 0);
+    topShelf.castShadow = true;
+    topShelf.receiveShadow = true;
+    this.shelfFurniture.add(topShelf);
+
+    const sideGeometry = new RoundedBoxGeometry(0.18, 2.5, 1.68, 5, 0.04);
+    const shelfCenter = cursor * 0.5;
+    const sideOffset = shelfWidth * 0.5 - 0.09;
+    [-1, 1].forEach((direction) => {
+      const side = new THREE.Mesh(sideGeometry, shelfMaterial);
+      side.name = direction < 0 ? "archiveShelfLeft" : "archiveShelfRight";
+      side.position.set(
+        shelfCenter + direction * sideOffset,
+        shelfTop + 1.17,
+        0,
+      );
+      side.castShadow = true;
+      side.receiveShadow = true;
+      this.shelfFurniture.add(side);
+    });
   }
 
   private createRecord(
@@ -1203,7 +1230,7 @@ export class RecordShelfEngine {
         this.responsiveBrowseCamera,
         1 - Math.exp(-(this.reducedMotion ? 18 : 7) * delta),
       );
-      this.camera.lookAt(browseTarget);
+      this.camera.lookAt(this.responsiveBrowseTarget);
     } else if (this.mode === "focusing") {
       this.focusProgress = clamp(
         this.focusProgress +
@@ -1236,7 +1263,7 @@ export class RecordShelfEngine {
         this.responsiveBrowseCamera,
         1 - Math.exp(-(this.reducedMotion ? 24 : 14) * delta),
       );
-      this.camera.lookAt(browseTarget);
+      this.camera.lookAt(this.responsiveBrowseTarget);
       if (this.focusProgress <= 0) {
         if (this.selectedIndex !== null) {
           this.commitRecordPose(
@@ -1599,9 +1626,14 @@ export class RecordShelfEngine {
     const height = Math.max(1, this.canvas.clientHeight);
     const dprCap = width < 760 ? 1.5 : 1.75;
     this.responsiveBrowseCamera.set(
-      0,
+      width < 760 ? 0.55 : browseCamera.x,
       width < 760 ? 1.53 : browseCamera.y,
-      width < 760 ? 8.45 : browseCamera.z,
+      width < 760 ? 13.2 : browseCamera.z,
+    );
+    this.responsiveBrowseTarget.set(
+      width < 760 ? 0.55 : browseTarget.x,
+      browseTarget.y,
+      browseTarget.z,
     );
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, dprCap));
     this.renderer.setSize(width, height, false);
@@ -1617,7 +1649,7 @@ export class RecordShelfEngine {
     if (this.mode === "browse" && this.focusProgress < 0.01) {
       this.camera.clearViewOffset();
       this.camera.position.copy(this.responsiveBrowseCamera);
-      this.camera.lookAt(browseTarget);
+      this.camera.lookAt(this.responsiveBrowseTarget);
     } else if (this.mode === "inspect" && this.selectedIndex !== null) {
       const worldPosition = new THREE.Vector3();
       this.runtimeRecords[this.selectedIndex].content.getWorldPosition(

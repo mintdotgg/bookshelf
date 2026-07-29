@@ -12,6 +12,8 @@ are authorized to distribute.
 ## Features
 
 - Browse with drag, wheel, arrow keys, Home, End, or the archive index.
+- See the full catalog together in an open walnut record cabinet with a
+  deliberate air gap between every shelved sleeve.
 - Preserve a collision-safe retreat, rotate, shelve, extract, rotate, settle
   handoff between records.
 - Inspect square sleeves and detailed pressings with orbit, pan, zoom, and a
@@ -27,8 +29,9 @@ are authorized to distribute.
 - Respect keyboard navigation, visible focus, touch input, safe areas, and
   reduced-motion preferences.
 
-On narrow screens, the layout prioritizes the centered sleeve, track list,
-compact player, and a scaled turntable stage.
+On narrow screens, the browse camera keeps the complete shelf lineup visible;
+inspection prioritizes the centered sleeve, track list, compact player, and a
+scaled turntable stage.
 
 ## Quick start
 
