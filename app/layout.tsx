@@ -22,7 +22,7 @@ export async function generateMetadata(): Promise<Metadata> {
     title,
     description,
     applicationName: siteConfig.applicationName,
-    category: "books",
+    category: "music",
     openGraph: {
       title,
       description,
@@ -51,7 +51,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#eee8db",
+  themeColor: "#e7dfd1",
   colorScheme: "light",
 };
 

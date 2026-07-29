@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve The Complete Shelf.
+Thanks for helping improve Needle Archive.
 
 ## Set up the project
 
@@ -11,32 +11,34 @@ npm ci
 npm run dev
 ```
 
-No environment variables, database, Mint account, or third-party edition
-archive is required for the default procedural shelf.
+No environment variables, database, Mint account, or third-party media archive
+is required for the default procedural collection.
 
 ## Make a focused change
 
-- Keep catalog and collection content in `app/catalog.ts` and
+- Keep catalog and collection content in `app/record-catalog.ts` and
   `app/site-config.ts`.
-- Keep renderer lifecycle, input, and disposal logic in `app/ShelfEngine.ts`.
-- Add contributor-owned covers under `public/books/<catalog-id>/`.
-- Do not commit anything under `public/assets/stripe-press/`.
+- Keep renderer lifecycle, input, and disposal logic in
+  `app/RecordShelfEngine.ts`.
+- Add contributor-owned artwork and audio under `public/records/<record-id>/`.
+- Commit only media you created or are authorized to redistribute.
 - Preserve keyboard navigation, reduced-motion behavior, and the procedural
   fallback when changing visual code.
 - Avoid drive-by formatting or generated-file changes unrelated to the pull
   request.
 
-For new books, follow [docs/adding-books.md](docs/adding-books.md).
+For new records, follow [docs/adding-records.md](docs/adding-records.md).
 
 ## Asset rights
 
 Pull requests must not include scraped page captures, compiled third-party
-JavaScript, book PDFs, proprietary 3D models, cover art, logos, quotes, or
+JavaScript, proprietary 3D models, album art, audio, logos, or
 descriptions unless the contributor can grant the repository the right to
 redistribute them under the project’s license.
 
 Publicly reachable files are not automatically open source. When in doubt, use
-the procedural cover generator and content you wrote yourself.
+the procedural sleeve generator, the deterministic preview generator, and
+content you wrote yourself.
 
 ## Run the checks
 
@@ -46,8 +48,7 @@ npm run security:audit
 ```
 
 If a change affects rendering, describe what you inspected manually. Do not
-commit build output, Wrangler state, TypeScript build info, or local edition
-assets.
+commit build output, Wrangler state, TypeScript build info, or private media.
 
 ## Pull requests
 

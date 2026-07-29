@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
+const projectRoot = new URL("../", import.meta.url);
+
 async function render() {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -23,7 +25,94 @@ async function render() {
   );
 }
 
-test("server-renders the complete editorial bookshelf shell", async () => {
+function countMatches(source, pattern) {
+  return [...source.matchAll(pattern)].length;
+}
+
+function assertNumericObjectClose(actual, expected, label, epsilon = 1e-12) {
+  assert.deepEqual(Object.keys(actual), Object.keys(expected), `${label} keys`);
+  for (const key of Object.keys(expected)) {
+    assert.ok(
+      Math.abs(actual[key] - expected[key]) <= epsilon,
+      `${label}.${key}: expected ${expected[key]}, received ${actual[key]}`,
+    );
+  }
+}
+
+function publicFileUrl(publicUrl) {
+  assert.match(publicUrl, /^\/records\/[a-z0-9-]+\/[a-z0-9-]+\.wav$/);
+  return new URL(`public${publicUrl}`, projectRoot);
+}
+
+function parseWav(buffer, label) {
+  assert.ok(buffer.length >= 44, `${label} must include a complete WAV header`);
+  assert.equal(buffer.toString("ascii", 0, 4), "RIFF", `${label} RIFF marker`);
+  assert.equal(buffer.toString("ascii", 8, 12), "WAVE", `${label} WAVE marker`);
+
+  const declaredFileSize = buffer.readUInt32LE(4) + 8;
+  assert.equal(
+    declaredFileSize,
+    buffer.length,
+    `${label} RIFF size must match the local file`,
+  );
+
+  let format = null;
+  let dataBytes = null;
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const chunkId = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32LE(offset + 4);
+    const chunkStart = offset + 8;
+    const chunkEnd = chunkStart + chunkSize;
+    assert.ok(chunkEnd <= buffer.length, `${label} ${chunkId} chunk is bounded`);
+
+    if (chunkId === "fmt ") {
+      assert.ok(chunkSize >= 16, `${label} fmt chunk is complete`);
+      format = {
+        audioFormat: buffer.readUInt16LE(chunkStart),
+        channels: buffer.readUInt16LE(chunkStart + 2),
+        sampleRate: buffer.readUInt32LE(chunkStart + 4),
+        byteRate: buffer.readUInt32LE(chunkStart + 8),
+        blockAlign: buffer.readUInt16LE(chunkStart + 12),
+        bitsPerSample: buffer.readUInt16LE(chunkStart + 14),
+      };
+    } else if (chunkId === "data") {
+      dataBytes = chunkSize;
+    }
+
+    offset = chunkEnd + (chunkSize % 2);
+  }
+
+  assert.ok(format, `${label} must contain a fmt chunk`);
+  assert.ok(dataBytes > 0, `${label} must contain PCM sample data`);
+  assert.equal(format.audioFormat, 1, `${label} must use uncompressed PCM`);
+  assert.ok(
+    format.channels === 1 || format.channels === 2,
+    `${label} must be mono or stereo`,
+  );
+  assert.ok(
+    format.sampleRate >= 22_050 && format.sampleRate <= 96_000,
+    `${label} sample rate is browser-friendly`,
+  );
+  assert.ok(
+    [16, 24].includes(format.bitsPerSample),
+    `${label} uses 16-bit or 24-bit samples`,
+  );
+  assert.equal(
+    format.blockAlign,
+    format.channels * (format.bitsPerSample / 8),
+    `${label} block alignment matches its sample format`,
+  );
+  assert.equal(
+    format.byteRate,
+    format.sampleRate * format.blockAlign,
+    `${label} byte rate matches its sample format`,
+  );
+
+  return dataBytes / format.byteRate;
+}
+
+test("server-renders the Needle Archive shell without provider branding", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -31,43 +120,32 @@ test("server-renders the complete editorial bookshelf shell", async () => {
   const html = await response.text();
   assert.match(
     html,
-    /<title>The Complete Shelf — An Interactive 3D Library<\/title>/i,
+    /<title>Needle Archive — An Interactive Vinyl Collection<\/title>/i,
   );
-  assert.match(html, /19(?:<!-- -->)? VOLUMES/);
-  assert.match(html, /01 CONTINUOUS SHELF/);
-  assert.match(html, /data-testid="shelf-canvas"/);
+  assert.match(html, /NEEDLE ARCHIVE/);
+  assert.match(html, /AN INTERACTIVE VINYL COLLECTION/);
+  assert.match(html, /08(?:<!-- -->)? PRESSINGS/);
+  assert.match(html, /01 CONTINUOUS ARCHIVE/);
+  assert.match(html, /data-testid="archive-canvas"/);
   assert.match(html, /data-testid="inspect-active"/);
-  assert.match(html, /data-testid="mint-attribution"/);
-  assert.match(html, /href="https:\/\/mint\.gg"/);
-  assert.match(html, /Made with Mint\. Visit mint\.gg/);
-  assert.match(html, /Poor Charlie’s Almanack/);
-  assert.match(html, /Browse to High Growth Handbook/);
-  const shelfOrder = [
-    "Maintenance: Of Everything, Part One",
-    "The Dream Machine",
-    "The Scaling Era",
-    "The Art of Doing Science and Engineering",
-    "Poor Charlie’s Almanack",
-    "High Growth Handbook",
-    "The Origins of Efficiency",
-    "Scaling People",
-    "The Revolt of the Public",
-    "The Big Score",
-    "An Elegant Puzzle",
-    "Boom: Bubbles and the End of Stagnation",
-    "The Making of Prince of Persia",
-    "Where Is My Flying Car?",
-    "Pieces of the Action",
-    "Working in Public",
-    "Get Together",
-    "Scientific Freedom",
-    "Stubborn Attachments",
-  ];
-  const renderedPositions = shelfOrder.map((title) =>
-    html.indexOf(`Browse to ${title}`),
+  assert.match(html, /data-testid="album-panel"/);
+  assert.match(html, /data-testid="preview-player"/);
+  assert.match(html, /aria-label="Music preview player"/);
+  assert.match(html, /Original demonstration artwork and audio/);
+
+  const { recordCatalog } = await import("../app/record-catalog.ts");
+  const renderedPositions = recordCatalog.map((record) =>
+    html.indexOf(`Browse to ${record.title} by ${record.artist}`),
   );
-  assert.ok(renderedPositions.every((position) => position >= 0));
-  assert.deepEqual(renderedPositions, [...renderedPositions].sort((a, b) => a - b));
+  assert.ok(
+    renderedPositions.every((position) => position >= 0),
+    "every catalog entry is represented in the server-rendered archive index",
+  );
+  assert.deepEqual(
+    renderedPositions,
+    [...renderedPositions].sort((left, right) => left - right),
+  );
+
   assert.match(html, /og:image/);
   assert.match(html, /\/social-card\.webp/);
   assert.match(html, /summary_large_image/);
@@ -75,194 +153,449 @@ test("server-renders the complete editorial bookshelf shell", async () => {
   assert.match(html, /630/);
   assert.doesNotMatch(
     html,
+    /\bStripe Press\b|\bmint\.gg\b|Made with Mint|mint-attribution/i,
+  );
+  assert.doesNotMatch(
+    html,
+    /The Complete Shelf|Poor Charlie(?:’|&#x27;)s Almanack|Amazon purchase/i,
+  );
+  assert.doesNotMatch(
+    html,
     /View (?:local|all) assets|open-asset-library|asset-library/i,
   );
-  assert.doesNotMatch(html, /Your site is taking shape|react-loading-skeleton/);
 });
 
-test("keeps third-party editions optional and supports owned cover art", async () => {
-  const [engine, styles, catalogSource, coverArt, addingBooks, gitignore] =
-    await Promise.all([
-      readFile(new URL("../app/ShelfEngine.ts", import.meta.url), "utf8"),
-      readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
-      readFile(new URL("../app/catalog.ts", import.meta.url), "utf8"),
-      readFile(new URL("../app/cover-art.ts", import.meta.url), "utf8"),
-      readFile(new URL("../docs/adding-books.md", import.meta.url), "utf8"),
-      readFile(new URL("../.gitignore", import.meta.url), "utf8"),
-    ]);
+test("ships eight valid, unique, rights-safe starter records", async () => {
+  const { RECORD_ASSET_ROOT, catalog, recordAssetUrl, recordCatalog } =
+    await import("../app/record-catalog.ts");
 
-  assert.match(catalogSource, /coverImage\?: string/);
-  assert.match(engine, /loadCustomCover\(runtime, book\.coverImage\)/);
-  assert.match(engine, /customCover:\$\{runtime\.data\.id\}/);
-  assert.match(engine, /Keep the generated procedural cover/);
-  assert.match(engine, /\$\{this\.booksData\.length\} volumes ready/);
-  assert.match(coverArt, /siteConfig\.coverImprint/);
-  assert.doesNotMatch(coverArt, /STRIPE PRESS/);
-  assert.match(addingBooks, /public\/books\/my-book\/cover\.webp/);
-  assert.match(addingBooks, /If the image is missing.*procedural cover/s);
-  assert.match(gitignore, /\/public\/assets\/stripe-press\//);
-
-  // A separately licensed local archive can still activate the specialized
-  // edition adapter, but no archive is required by this test or a clean clone.
-  assert.match(engine, /OBJLoader/);
-  assert.match(engine, /loadStripeAssets/);
-  assert.match(engine, /MeshPhysicalMaterial/);
-  assert.match(engine, /addStripeFoilBlend/);
-  assert.match(engine, /stripeBookCoverFacingRotationY = -Math\.PI \/ 2/);
-  assert.match(
-    engine,
-    /runtime\.data\.thickness \/ this\.stripeGeometrySize\.x/,
-  );
-  assert.match(
-    engine,
-    /runtime\.data\.height \/ this\.stripeGeometrySize\.y/,
-  );
-  assert.match(engine, /targetWidth \/ this\.stripeGeometrySize\.z/);
-  const focusDuration = Number(
-    engine.match(/const focusInDuration = ([0-9.]+);/)?.[1],
-  );
-  const returnDuration = Number(
-    engine.match(/const focusOutDuration = ([0-9.]+);/)?.[1],
-  );
-  assert.ok(focusDuration >= 0.35 && focusDuration <= 0.55);
-  assert.ok(returnDuration >= 0.25 && returnDuration <= 0.45);
-  assert.match(engine, /easeOutCubic\(this\.focusProgress\)/);
-  assert.match(engine, /updateBrowseMotion\(delta\)/);
-  assert.match(engine, /commitBookPose\(/);
-  assert.match(engine, /bookFootprintsOverlap\(/);
-  assert.match(engine, /private motionBookIndex: number \| null/);
-  assert.doesNotMatch(engine, /const reveal = ease/);
-  assert.match(engine, /frameFocusedBook\(worldPosition\)/);
-  assert.match(engine, /this\.camera\.setViewOffset/);
-  assert.match(engine, /this\.focusCameraTarget\.copy\(worldPosition\)/);
-  assert.doesNotMatch(engine, /worldPosition\.x \+ stageCenterOffset/);
-  assert.match(engine, /this\.controls\.target\.copy\(this\.focusCameraTarget\)/);
-  assert.match(engine, /bookInspectionIdle:/);
-  assert.match(engine, /this\.mode === "inspect" && !this\.reducedMotion/);
-  assert.match(styles, /\.browse-caption::before/);
-  assert.match(styles, /rgba\(238, 232, 219, 0\.96\)/);
-  assert.doesNotMatch(
-    engine,
-    /focusProgress = damp\(\s*this\.focusProgress,\s*1/s,
-  );
-  assert.doesNotMatch(engine, /sourceBounds.*setFromObject\(root\)/s);
-  assert.doesNotMatch(engine, /GLTFLoader|loadMintAssets/);
-});
-
-test("restores colored foil artwork from edition coverage maps", async () => {
-  const { addStripeFoilBlend, stripeFoilSettings } = await import(
-    "../app/stripe-foil.ts"
-  );
-  const shader = addStripeFoilBlend(`
-    #include <map_pars_fragment>
-    void main() {
-      vec4 diffuseColor = vec4(1.0);
-      vec3 normal = vec3(0.0, 0.0, 1.0);
-      #include <normal_fragment_maps>
-    }
-  `);
-
-  assert.match(shader, /uniform sampler2D stripeFoilMap/);
-  assert.match(shader, /texture2D\(stripeFoilMap, vMapUv\)/);
-  assert.match(shader, /texture2D\(map, stripeFoilIndex\)/);
-  assert.match(shader, /diffuseColor\.rgb = mix/);
-  const normalMapsIndex = shader.indexOf("#include <normal_fragment_maps>");
-  const foilCoverageIndex = shader.indexOf("float stripeFoilCoverage");
-  assert.ok(normalMapsIndex >= 0);
-  assert.ok(foilCoverageIndex > normalMapsIndex);
-
-  assert.deepEqual(
-    stripeFoilSettings({ foilOpacity: 1.5, foilDetail: 3 }),
-    { enabled: true, opacity: 1.5, detail: 3 },
-  );
-  assert.deepEqual(
-    stripeFoilSettings({ foilOpacity: -1, foilDetail: 0 }),
-    { enabled: false, opacity: 0, detail: 0.1 },
-  );
-});
-
-test("provides an Amazon purchase link for every catalog book", async () => {
-  const { catalog } = await import(
-    new URL("../app/catalog.ts", import.meta.url)
-  );
-
-  assert.equal(catalog.length, 19);
+  assert.equal(recordCatalog.length, 8);
+  assert.equal(catalog, recordCatalog);
+  assert.equal(RECORD_ASSET_ROOT, "/records");
   assert.equal(
-    new Set(catalog.map((book) => book.amazonUrl)).size,
-    catalog.length,
+    recordAssetUrl("/example-record/", "/preview-example.wav"),
+    "/records/example-record/preview-example.wav",
   );
-  for (const book of catalog) {
-    assert.match(
-      book.amazonUrl,
-      /^https:\/\/(?:www|smile)\.amazon\.com\//,
-      `${book.id} should use an Amazon product URL`,
+
+  const recordIds = new Set();
+  const recordTitles = new Set();
+  const trackIds = new Set();
+  const previewUrls = new Set();
+  const allowedMotifs = new Set([
+    "signal-bloom",
+    "tidal-lines",
+    "night-grid",
+    "cut-paper",
+    "orbit-cluster",
+    "magnetic-field",
+    "glass-prism",
+    "topographic",
+  ]);
+
+  for (const record of recordCatalog) {
+    assert.match(record.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+    assert.ok(!recordIds.has(record.id), `duplicate record id: ${record.id}`);
+    assert.ok(
+      !recordTitles.has(record.title),
+      `duplicate record title: ${record.title}`,
+    );
+    recordIds.add(record.id);
+    recordTitles.add(record.title);
+
+    assert.ok(record.title.length > 2);
+    assert.ok(record.shortTitle.length > 2);
+    assert.ok(record.artist.length > 2);
+    assert.ok(record.description.length >= 80);
+    assert.ok(record.year >= 1900 && record.year <= 2100);
+    assert.ok(record.genres.length >= 1);
+    assert.ok(allowedMotifs.has(record.motif));
+    assert.match(record.sleeveColor, /^#[0-9a-f]{6}$/i);
+    assert.match(record.accent, /^#[0-9a-f]{6}$/i);
+    assert.match(record.ink, /^#[0-9a-f]{6}$/i);
+    assert.match(record.vinylColor, /^#[0-9a-f]{6}$/i);
+    assert.ok(record.rpm === 33.333 || record.rpm === 45);
+    assert.ok((record.sleeveSize ?? 0) >= 2.1);
+    assert.ok((record.sleeveSize ?? 3) <= 2.25);
+    assert.ok((record.sleeveThickness ?? 0) >= 0.07);
+    assert.ok((record.sleeveThickness ?? 1) <= 0.11);
+    assert.equal(record.tracks.length, 2);
+
+    for (const [index, track] of record.tracks.entries()) {
+      assert.match(track.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
+      assert.ok(!trackIds.has(track.id), `duplicate track id: ${track.id}`);
+      trackIds.add(track.id);
+      assert.equal(track.trackNumber, index + 1);
+      assert.equal(track.side, index === 0 ? "A" : "B");
+      assert.ok((track.duration ?? 0) > 0);
+      assert.ok(track.previewUrl, `${record.id}/${track.id} has a preview`);
+      assert.equal(
+        track.previewUrl.startsWith(`/records/${record.id}/`),
+        true,
+        `${record.id}/${track.id} stays inside its record asset directory`,
+      );
+      assert.ok(
+        !previewUrls.has(track.previewUrl),
+        `duplicate preview URL: ${track.previewUrl}`,
+      );
+      previewUrls.add(track.previewUrl);
+    }
+
+    for (const link of record.links ?? []) {
+      assert.match(link.url, /^https:\/\//);
+      assert.doesNotMatch(link.url, /amazon\.|stripe\.|mint\.gg/i);
+    }
+  }
+
+  assert.equal(recordIds.size, 8);
+  assert.equal(trackIds.size, 16);
+  assert.equal(previewUrls.size, 16);
+});
+
+test("every referenced preview is a sane local PCM WAV with catalog duration", async () => {
+  const { recordCatalog } = await import("../app/record-catalog.ts");
+
+  for (const record of recordCatalog) {
+    for (const track of record.tracks) {
+      assert.ok(track.previewUrl);
+      const label = `${record.id}/${track.id}`;
+      const file = await readFile(publicFileUrl(track.previewUrl));
+      const duration = parseWav(file, label);
+      assert.ok(duration >= 5 && duration <= 60, `${label} preview duration`);
+      assert.ok(
+        Math.abs(duration - track.duration) <= 0.05,
+        `${label} header duration ${duration.toFixed(3)}s matches catalog ${
+          track.duration
+        }s`,
+      );
+    }
+  }
+});
+
+test("playback reducer enforces legal commands and idempotent transitions", async () => {
+  const {
+    canPause,
+    canPlay,
+    canSeek,
+    initialPlaybackState,
+    reducePlaybackState,
+  } = await import("../app/audio/playback-state.ts");
+
+  let state = initialPlaybackState(4);
+  assert.equal(state.mode, "idle");
+  assert.equal(state.volume, 1);
+  assert.equal(canPlay(state), false);
+  assert.equal(canPause(state), false);
+  assert.equal(canSeek(state), false);
+
+  for (const action of [
+    { type: "PLAY" },
+    { type: "PAUSE" },
+    { type: "SEEK", time: 12 },
+    { type: "STOP" },
+    { type: "CLEAR_ERROR" },
+    { type: "CUE_COMPLETE", requestId: 0 },
+  ]) {
+    assert.equal(
+      reducePlaybackState(state, action),
+      state,
+      `${action.type} is a no-op from idle`,
     );
   }
 
-  const detailsSource = await readFile(
-    new URL("../app/ProgressLibrary.tsx", import.meta.url),
-    "utf8",
+  state = reducePlaybackState(state, {
+    type: "LOAD",
+    trackId: "platform-light",
+    src: "/records/afterimage-transit/preview-platform-light.wav",
+  });
+  assert.equal(state.mode, "loading");
+  assert.equal(state.requestId, 1);
+  assert.equal(state.playWhenReady, false);
+  assert.equal(canPlay(state), true);
+
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "LOAD",
+      trackId: "platform-light",
+      src: "/records/afterimage-transit/preview-platform-light.wav",
+    }),
+    state,
+    "reloading the same pending track without autoplay is idempotent",
   );
-  assert.match(detailsSource, /data-testid="amazon-link"/);
-  assert.match(detailsSource, /href=\{selectedBook\.amazonUrl\}/);
+
+  state = reducePlaybackState(state, {
+    type: "LOAD",
+    trackId: "platform-light",
+    src: "/records/afterimage-transit/preview-platform-light.wav",
+    autoplay: true,
+  });
+  assert.equal(state.requestId, 1);
+  assert.equal(state.playWhenReady, true);
+  const repeatedAutoplay = reducePlaybackState(state, {
+    type: "LOAD",
+    trackId: "platform-light",
+    src: "/records/afterimage-transit/preview-platform-light.wav",
+    autoplay: true,
+  });
+  assert.equal(repeatedAutoplay, state);
+
+  const staleReady = reducePlaybackState(state, {
+    type: "MEDIA_READY",
+    requestId: 0,
+    duration: 18,
+  });
+  assert.equal(staleReady, state);
+
+  state = reducePlaybackState(state, {
+    type: "MEDIA_READY",
+    requestId: state.requestId,
+    duration: 18,
+  });
+  assert.equal(state.mode, "cueing");
+  assert.equal(state.duration, 18);
+  assert.equal(canPause(state), true);
+  assert.equal(reducePlaybackState(state, { type: "PLAY" }), state);
+  state = reducePlaybackState(state, {
+    type: "MEDIA_SEEKED",
+    requestId: state.requestId,
+    currentTime: 0,
+  });
+  assert.equal(state.mode, "cueing");
+  assert.equal(
+    state.playWhenReady,
+    true,
+    "media priming seeks must not cancel queued autoplay",
+  );
+
+  state = reducePlaybackState(state, {
+    type: "CUE_COMPLETE",
+    requestId: state.requestId,
+  });
+  assert.equal(state.mode, "playing");
+  assert.equal(state.playWhenReady, false);
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "CUE_COMPLETE",
+      requestId: state.requestId,
+    }),
+    state,
+  );
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "MEDIA_PLAYING",
+      requestId: state.requestId,
+    }),
+    state,
+  );
+
+  state = reducePlaybackState(state, { type: "PAUSE" });
+  assert.equal(state.mode, "paused");
+  assert.equal(reducePlaybackState(state, { type: "PAUSE" }), state);
+  state = reducePlaybackState(state, { type: "PLAY" });
+  assert.equal(state.mode, "cueing");
+  state = reducePlaybackState(state, {
+    type: "CUE_COMPLETE",
+    requestId: state.requestId,
+  });
+  assert.equal(state.mode, "playing");
+
+  state = reducePlaybackState(state, { type: "SEEK", time: 99 });
+  assert.equal(state.mode, "seeking");
+  assert.equal(state.currentTime, 18);
+  assert.equal(state.resumeAfterSeek, "playing");
+  assert.equal(
+    reducePlaybackState(state, { type: "SEEK", time: 99 }),
+    state,
+    "an identical in-flight seek is idempotent",
+  );
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "MEDIA_SEEKED",
+      requestId: state.requestId - 1,
+      currentTime: 7,
+    }),
+    state,
+  );
+  state = reducePlaybackState(state, {
+    type: "MEDIA_SEEKED",
+    requestId: state.requestId,
+    currentTime: 18,
+  });
+  assert.equal(state.mode, "playing");
+
+  state = reducePlaybackState(state, { type: "STOP" });
+  assert.equal(state.mode, "stopping");
+  assert.equal(reducePlaybackState(state, { type: "STOP" }), state);
+  assert.equal(reducePlaybackState(state, { type: "PLAY" }), state);
+  state = reducePlaybackState(state, {
+    type: "MEDIA_STOPPED",
+    requestId: state.requestId,
+  });
+  assert.equal(state.mode, "idle");
+  assert.equal(state.currentTime, 0);
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "MEDIA_STOPPED",
+      requestId: state.requestId,
+    }),
+    state,
+  );
+
+  const clampedVolume = reducePlaybackState(state, {
+    type: "SET_VOLUME",
+    volume: -5,
+  });
+  assert.equal(clampedVolume.volume, 0);
+  assert.equal(
+    reducePlaybackState(clampedVolume, {
+      type: "SET_VOLUME",
+      volume: Number.NaN,
+    }),
+    clampedVolume,
+  );
 });
 
-test("keeps every book footprint separated throughout browse and focus routes", async () => {
-  const [
-    { catalog },
+test("playback reducer rejects stale media events and recovers from errors", async () => {
+  const { initialPlaybackState, reducePlaybackState } = await import(
+    "../app/audio/playback-state.ts"
+  );
+
+  let state = reducePlaybackState(initialPlaybackState(), {
+    type: "LOAD",
+    trackId: "platform-light",
+    src: "/records/afterimage-transit/preview-platform-light.wav",
+    autoplay: true,
+  });
+  const firstRequest = state.requestId;
+  state = reducePlaybackState(state, {
+    type: "LOAD",
+    trackId: "blue-corridor",
+    src: "/records/night-geometry/preview-blue-corridor.wav",
+    autoplay: true,
+  });
+  assert.equal(state.requestId, firstRequest + 1);
+
+  for (const action of [
+    { type: "MEDIA_READY", requestId: firstRequest, duration: 18 },
+    { type: "MEDIA_PLAYING", requestId: firstRequest },
     {
-      bookFootprintsOverlap,
-      browseMotionPose,
+      type: "MEDIA_TIME",
+      requestId: firstRequest,
+      currentTime: 9,
+      duration: 18,
+    },
+    { type: "MEDIA_SEEKED", requestId: firstRequest, currentTime: 9 },
+    { type: "MEDIA_ENDED", requestId: firstRequest },
+    { type: "MEDIA_STOPPED", requestId: firstRequest },
+    {
+      type: "MEDIA_ERROR",
+      requestId: firstRequest,
+      message: "Stale failure",
+    },
+    { type: "CUE_COMPLETE", requestId: firstRequest },
+  ]) {
+    assert.equal(
+      reducePlaybackState(state, action),
+      state,
+      `${action.type} from a superseded request is ignored`,
+    );
+  }
+
+  state = reducePlaybackState(state, {
+    type: "MEDIA_ERROR",
+    requestId: state.requestId,
+    message: "",
+  });
+  assert.equal(state.mode, "error");
+  assert.equal(state.error, "Audio playback failed.");
+  assert.equal(reducePlaybackState(state, { type: "PLAY" }), state);
+
+  const retry = reducePlaybackState(state, {
+    type: "LOAD",
+    trackId: "blue-corridor",
+    src: "/records/night-geometry/preview-blue-corridor.wav",
+    autoplay: true,
+  });
+  assert.equal(retry.mode, "loading");
+  assert.equal(retry.requestId, state.requestId + 1);
+  assert.equal(retry.error, null);
+
+  const missingPreview = reducePlaybackState(initialPlaybackState(), {
+    type: "LOAD",
+    trackId: "missing-preview",
+    src: "",
+    autoplay: true,
+  });
+  const missingError = reducePlaybackState(missingPreview, {
+    type: "MEDIA_ERROR",
+    requestId: missingPreview.requestId,
+    message: "No preview is available for this track.",
+  });
+  assert.equal(missingError.mode, "error");
+  assert.match(missingError.error, /No preview is available/);
+  const cleared = reducePlaybackState(missingError, { type: "CLEAR_ERROR" });
+  assert.equal(cleared.mode, "idle");
+  assert.equal(cleared.error, null);
+  assert.equal(cleared.currentTime, 0);
+});
+
+test("keeps every sleeve footprint separated across all six browse phases", async () => {
+  const [
+    { recordCatalog },
+    {
       browsePhaseDuration,
-      createMotionLayout,
-      focusedBookPose,
-      presentedBookPose,
-      shelvedBookPose,
+      browseRecordMotionPose,
+      createRecordMotionLayout,
+      presentedRecordPose,
+      recordFootprintsOverlap,
+      shelvedRecordPose,
     },
   ] = await Promise.all([
-    import(new URL("../app/catalog.ts", import.meta.url)),
-    import(new URL("../app/book-motion.ts", import.meta.url)),
+    import("../app/record-catalog.ts"),
+    import("../app/record-motion.ts"),
   ]);
-  const gap = 0.045;
+
+  const gap = 0.055;
   let cursor = 0;
-  const books = catalog.map((book, index) => {
-    cursor += book.thickness * 0.5;
+  const records = recordCatalog.map((record) => {
+    const thickness = record.sleeveThickness ?? 0.085;
+    cursor += thickness * 0.5;
     const runtime = {
-      id: book.id,
+      id: record.id,
       x: cursor,
-      width: 1.31 + ((index % 5) - 2) * 0.018,
-      thickness: book.thickness,
+      width: record.sleeveSize ?? 2.16,
+      thickness,
     };
-    cursor += book.thickness * 0.5 + gap;
+    cursor += thickness * 0.5 + gap;
     return runtime;
   });
-  const layout = createMotionLayout(books);
+  const layout = createRecordMotionLayout(records);
   assert.ok(layout.rotationLaneZ > layout.presentedZ);
-  assert.ok(layout.rotationLaneZ < 1.4);
+  assert.ok(layout.presentedZ > layout.shelvedZ);
+  assert.ok(layout.rotationLaneZ < 2);
 
-  function footprint(book, pose) {
+  function footprint(record, pose) {
     return {
-      id: book.id,
-      x: book.x + pose.x,
+      id: record.id,
+      x: record.x + pose.x,
       z: 0.04 + pose.z,
       yaw: pose.yaw,
       scale: pose.scale,
-      width: book.width,
-      thickness: book.thickness,
+      width: record.width,
+      thickness: record.thickness,
     };
   }
 
   function assertSeparated(poses, context) {
-    for (let left = 0; left < books.length; left += 1) {
-      for (let right = left + 1; right < books.length; right += 1) {
+    for (let left = 0; left < records.length; left += 1) {
+      for (let right = left + 1; right < records.length; right += 1) {
         assert.equal(
-          bookFootprintsOverlap(
-            footprint(books[left], poses[left]),
-            footprint(books[right], poses[right]),
+          recordFootprintsOverlap(
+            footprint(records[left], poses[left]),
+            footprint(records[right], poses[right]),
             layout.collisionMargin,
           ),
           false,
-          `${context}: ${books[left].id} overlaps ${books[right].id}`,
+          `${context}: ${records[left].id} overlaps ${records[right].id}`,
         );
       }
     }
@@ -274,17 +607,26 @@ test("keeps every book footprint separated throughout browse and focus routes", 
     "shelve-current",
   ];
   const incomingPhases = ["extract-next", "turn-next", "settle-next"];
+  assert.deepEqual(
+    [...outgoingPhases, ...incomingPhases],
+    Object.keys(browsePhaseDuration),
+  );
 
-  for (let from = 0; from < books.length; from += 1) {
-    for (let to = 0; to < books.length; to += 1) {
+  for (let from = 0; from < records.length; from += 1) {
+    for (let to = 0; to < records.length; to += 1) {
       if (from === to) continue;
-      const poses = books.map(() => shelvedBookPose(layout));
-      poses[from] = presentedBookPose(layout);
+      const poses = records.map(() => shelvedRecordPose(layout));
+      poses[from] = presentedRecordPose(layout);
+      assertSeparated(poses, `${from}->${to} initial`);
 
       for (const phase of outgoingPhases) {
         const steps = Math.ceil(browsePhaseDuration[phase] * 240);
         for (let step = 0; step <= steps; step += 1) {
-          poses[from] = browseMotionPose(phase, step / steps, layout);
+          poses[from] = browseRecordMotionPose(
+            phase,
+            step / steps,
+            layout,
+          );
           assertSeparated(poses, `${from}->${to} ${phase} ${step}/${steps}`);
         }
       }
@@ -292,46 +634,281 @@ test("keeps every book footprint separated throughout browse and focus routes", 
       for (const phase of incomingPhases) {
         const steps = Math.ceil(browsePhaseDuration[phase] * 240);
         for (let step = 0; step <= steps; step += 1) {
-          poses[to] = browseMotionPose(phase, step / steps, layout);
+          poses[to] = browseRecordMotionPose(
+            phase,
+            step / steps,
+            layout,
+          );
           assertSeparated(poses, `${from}->${to} ${phase} ${step}/${steps}`);
         }
       }
     }
   }
 
-  for (let active = 0; active < books.length; active += 1) {
-    for (const focus of [
-      { x: -0.58, z: 1.66, scale: 1.08, viewport: "desktop" },
-      { x: 0, z: 1.4, scale: 0.92, viewport: "mobile" },
-    ]) {
-      const poses = books.map(() => shelvedBookPose(layout));
-      poses[active] = presentedBookPose(layout);
-      for (let step = 0; step <= 120; step += 1) {
-        poses[active] = focusedBookPose(
-          step / 120,
-          layout,
-          focus.x,
-          focus.z,
-          focus.scale,
-        );
-        assertSeparated(
-          poses,
-          `${focus.viewport} focus ${active} ${step}/120`,
-        );
-      }
-      for (let step = 120; step >= 0; step -= 1) {
-        poses[active] = focusedBookPose(
-          step / 120,
-          layout,
-          focus.x,
-          focus.z,
-          focus.scale,
-        );
-        assertSeparated(
-          poses,
-          `${focus.viewport} return ${active} ${step}/120`,
-        );
-      }
-    }
+  assertNumericObjectClose(
+    browseRecordMotionPose("retreat-current", 0, layout),
+    presentedRecordPose(layout),
+    "retreat start",
+  );
+  assertNumericObjectClose(
+    browseRecordMotionPose("settle-next", 1, layout),
+    presentedRecordPose(layout),
+    "settle end",
+  );
+  assertNumericObjectClose(
+    browseRecordMotionPose("shelve-current", 1, layout),
+    shelvedRecordPose(layout),
+    "shelve end",
+  );
+  assertNumericObjectClose(
+    browseRecordMotionPose("extract-next", 0, layout),
+    shelvedRecordPose(layout),
+    "extract start",
+  );
+});
+
+test("cue choreography has deterministic endpoints and exact reverse paths", async () => {
+  const { cueMotionPose } = await import("../app/record-motion.ts");
+  const layout = {
+    sleevedVinyl: {
+      x: -1.2,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1.03,
+    },
+    extractedVinyl: {
+      x: 0,
+      y: 1.42,
+      z: 1.72,
+      pitch: Math.PI / 2,
+      yaw: -0.08,
+      roll: -0.05,
+      scale: 0.94,
+    },
+    turntableApproachVinyl: {
+      x: 1.4,
+      y: 1.8,
+      z: 0.62,
+      pitch: 0.18,
+      yaw: 0.08,
+      roll: 0,
+      scale: 1,
+    },
+    platterVinyl: {
+      x: 1.4,
+      y: 0.72,
+      z: 0.54,
+      pitch: 0,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    tonearmRestYaw: -0.34,
+    tonearmLeadInYaw: 0.13,
+    tonearmRunoutYaw: 0.49,
+    tonearmRaisedLift: 0.12,
+    tonearmContactLift: 0,
+  };
+
+  assert.deepEqual(
+    cueMotionPose("extract-vinyl", 0, layout).vinyl,
+    layout.sleevedVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("extract-vinyl", 1, layout).vinyl,
+    layout.extractedVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("transport-to-turntable", 0, layout).vinyl,
+    layout.extractedVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("transport-to-turntable", 1, layout).vinyl,
+    layout.platterVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("return-to-sleeve", 0, layout).vinyl,
+    layout.platterVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("return-to-sleeve", 1, layout).vinyl,
+    layout.extractedVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("reinsert-vinyl", 1, layout).vinyl,
+    layout.sleevedVinyl,
+  );
+
+  const needleDown = cueMotionPose("lower-tonearm", 1, layout, 0.4);
+  const playing = cueMotionPose("playing", 0.4, layout);
+  assert.deepEqual(needleDown.tonearm, playing.tonearm);
+  assert.equal(needleDown.platterSpeed, 1);
+  assert.equal(needleDown.stylusContact, 1);
+  assert.equal(playing.platterSpeed, 1);
+  assert.equal(playing.stylusContact, 1);
+
+  const samples = [0, 0.01, 0.17, 0.5, 0.68, 0.91, 1];
+  for (const progress of samples) {
+    const extraction = cueMotionPose("extract-vinyl", progress, layout, 0.4);
+    const reinsertion = cueMotionPose(
+      "reinsert-vinyl",
+      1 - progress,
+      layout,
+      0.4,
+    );
+    assertNumericObjectClose(
+      extraction.vinyl,
+      reinsertion.vinyl,
+      `extraction reverse at ${progress}`,
+    );
+
+    const transport = cueMotionPose(
+      "transport-to-turntable",
+      progress,
+      layout,
+      0.4,
+    );
+    const returning = cueMotionPose(
+      "return-to-sleeve",
+      1 - progress,
+      layout,
+      0.4,
+    );
+    assertNumericObjectClose(
+      transport.vinyl,
+      returning.vinyl,
+      `transport reverse at ${progress}`,
+    );
+
+    const lowering = cueMotionPose(
+      "lower-tonearm",
+      progress,
+      layout,
+      0.4,
+    );
+    const raising = cueMotionPose(
+      "raise-tonearm",
+      1 - progress,
+      layout,
+      0.4,
+    );
+    assertNumericObjectClose(
+      lowering.tonearm,
+      raising.tonearm,
+      `tonearm reverse at ${progress}`,
+    );
+    assert.deepEqual(
+      cueMotionPose("lower-tonearm", progress, layout, 0.4),
+      lowering,
+      "sampling a cue pose has no hidden timing state",
+    );
   }
+
+  assert.deepEqual(
+    cueMotionPose("extract-vinyl", -10, layout).vinyl,
+    layout.sleevedVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("reinsert-vinyl", 10, layout).vinyl,
+    layout.sleevedVinyl,
+  );
+});
+
+test("engine owns the only animation loop and audio stays frame-loop free", async () => {
+  const [engine, audioController, audioVisualizer, library] = await Promise.all([
+    readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/audio/VinylAudioController.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../app/audio/audio-visualizer.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.equal(
+    countMatches(engine, /\brequestAnimationFrame\s*\(/g),
+    1,
+    "the engine has one self-scheduling animation loop",
+  );
+  assert.equal(countMatches(engine, /\bcancelAnimationFrame\s*\(/g), 1);
+  assert.match(engine, /private animate = \(\) =>/);
+  assert.match(engine, /this\.updateCue\(delta\)/);
+  assert.match(engine, /this\.updateAudioVisuals\(delta\)/);
+  assert.match(engine, /this\.renderer\.render\(this\.scene, this\.camera\)/);
+  assert.equal(
+    countMatches(`${audioController}\n${audioVisualizer}`, /\brequestAnimationFrame\s*\(/g),
+    0,
+    "audio and analyser helpers never create a second frame loop",
+  );
+  assert.match(audioController, /sampleFrequencyData\(\)/);
+  assert.match(audioController, /Returns the same typed array on every call/);
+  assert.match(library, /engine\.setAnalyserReader\(/);
+  assert.doesNotMatch(
+    library,
+    /setState\s*\([^)]*(?:frequency|analyser|waveform)/i,
+  );
+});
+
+test("exposes the safe vinyl diagnostics and command surface", async () => {
+  const [engine, library] = await Promise.all([
+    readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(library, /\).__VINYL_LIBRARY__ = \{/);
+  for (const method of [
+    "diagnostics",
+    "browse",
+    "focus",
+    "play",
+    "pause",
+    "stop",
+    "resetView",
+    "returnToShelf",
+  ]) {
+    assert.match(
+      library,
+      new RegExp(`\\b${method}:`),
+      `window.__VINYL_LIBRARY__.${method} is exposed`,
+    );
+  }
+  assert.match(library, /\.getDiagnostics\(\) \?\? null/);
+  assert.match(library, /delete \([\s\S]*\)\.__VINYL_LIBRARY__/);
+
+  const diagnosticsStart = engine.indexOf("  getDiagnostics() {");
+  const diagnosticsEnd = engine.indexOf("\n  dispose() {", diagnosticsStart);
+  assert.ok(diagnosticsStart >= 0 && diagnosticsEnd > diagnosticsStart);
+  const diagnostics = engine.slice(diagnosticsStart, diagnosticsEnd);
+  for (const field of [
+    "sceneMode",
+    "playbackMode",
+    "activeIndex",
+    "selectedIndex",
+    "records",
+    "drawCalls",
+    "triangles",
+    "geometries",
+    "textures",
+    "pixelRatio",
+    "motionPhase",
+    "cuePhase",
+    "cueProgress",
+    "collisionRejects",
+    "currentCollision",
+    "audio",
+    "canvas",
+  ]) {
+    assert.match(diagnostics, new RegExp(`\\b${field}:`));
+  }
+  assert.doesNotMatch(
+    diagnostics,
+    /^\s*(?:renderer|scene|camera|controls|runtimeRecords|audioElement):/m,
+  );
+  assert.doesNotMatch(library, /__VINYL_LIBRARY__[\s\S]{0,1200}\bsecret\b/i);
 });

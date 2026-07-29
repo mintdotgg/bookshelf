@@ -1,5 +1,5 @@
-import { ProgressLibrary } from "./ProgressLibrary";
+import { VinylLibrary } from "./VinylLibrary";
 
 export default function Home() {
-  return <ProgressLibrary />;
+  return <VinylLibrary />;
 }

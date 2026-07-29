@@ -1,299 +1,361 @@
-# Motion, objects, and animation feel
+# Motion, audio, and animation
 
-This document explains how the bookshelf’s Three.js objects, animation states,
-camera, and HTML interface work together. It is also the tuning guide for
-changing the motion without making the shelf feel slow, slippery, or physically
-impossible.
+Needle Archive coordinates a shelf, sleeve inspection, turntable, audio
+playback, and accessible HTML without giving multiple systems ownership of the
+same frame. React owns durable interface state, `RecordShelfEngine` owns visual
+transition progress, `VinylAudioController` owns browser audio, and pure
+functions define legal state changes and spatial poses.
 
-The short version: React owns durable interface state, one `ShelfEngine` owns
-all frame-by-frame Three.js state, and pure pose functions describe where a
-book may move. There is no general-purpose tweening library.
+There is no general-purpose tweening library and no secondary waveform or
+turntable animation loop.
 
 ## Source map
 
-- `app/ShelfEngine.ts` owns the renderer, scene, camera, controls, input,
-  animation frame, object lifecycle, and disposal.
-- `app/book-motion.ts` contains pure browse/focus pose functions and
-  collision math.
-- `app/ProgressLibrary.tsx` projects engine callbacks into accessible HTML
-  controls and details.
-- `app/globals.css` coordinates the HTML transitions with the 3D modes.
-- `app/catalog.ts` supplies each book’s height and thickness.
-- `tests/rendered-html.test.mjs` samples motion paths and guards the timing
-  envelope.
+- `app/RecordShelfEngine.ts` owns Three.js, input, scripted cameras, the one
+  repeating `requestAnimationFrame`, visual playback state, analyser sampling,
+  diagnostics, and disposal.
+- `app/record-motion.ts` contains pure shelf poses, separating-axis collision
+  math, vinyl transport poses, and tonearm poses.
+- `app/VinylLibrary.tsx` coordinates engine callbacks, audio callbacks, React
+  state, accessible controls, status announcements, and pending user intent.
+- `app/audio/playback-state.ts` defines the pure playback reducer and rejects
+  stale media events by request ID.
+- `app/audio/VinylAudioController.ts` owns one reusable `HTMLAudioElement` and
+  its lazy `MediaElementAudioSourceNode → GainNode → AnalyserNode → destination`
+  graph.
+- `app/audio/audio-visualizer.ts` supplies pure log-band sampling and
+  frame-rate-independent smoothing helpers.
+- `app/record-art.ts` supplies deterministic front, back, spine, and label
+  canvases.
+- `app/record-catalog.ts` supplies dimensions, pressing materials, track
+  metadata, and local media URLs.
+- `app/globals.css` projects durable scene and playback classes into responsive
+  HTML transitions.
+
+## Ownership boundaries
+
+`RecordShelfEngine` is the only owner of:
+
+- `WebGLRenderer`, scene, camera, OrbitControls, and ResizeObserver;
+- raycasting and pick proxies;
+- record, platter, tonearm, and camera transforms;
+- browse, focus, cue, and return progress;
+- the repeating animation frame and render call;
+- canvas diagnostics and Three.js resource disposal.
+
+React receives meaningful changes such as selected index, scene mode, playback
+mode, error, and status. It does not receive object positions, rotations,
+platter angles, analyser arrays, or other per-frame values.
+
+`VinylAudioController` owns media loading, audio-context unlock, playback,
+seeking, gain, analyser sampling, cancellation, and audio disposal. It exposes
+snapshots and callbacks; it never moves scene objects.
 
 ## Object hierarchy
 
-Every book uses stable wrapper groups so presentation motion is independent of
+Each album uses presentation wrappers that keep shelf motion independent from
 the visual source:
 
 ```text
 scene
-└── shelfGroup                    horizontal browse translation
-    ├── shelfFurniture            shelf boards; hidden in close inspection
-    └── slot                      permanent catalog position and book height
-        └── content               animated x, z, yaw, scale, and hover lift
-            └── inspectionIdle    centered, reduced-motion-aware idle motion
-                ├── physical      procedural boards, pages, spine, cover art
-                ├── assetHolder   optional imported edition mesh
-                ├── titleDecal    optional overlay for imported editions
-                ├── living shimmer optional animated shader plane
-                └── pickProxy     invisible, simple raycast geometry
+├── shelfGroup                         horizontal browse translation
+│   ├── shelfFurniture                 walnut shelf and rails
+│   └── slot                           permanent catalog x-position
+│       └── content                    browse/focus x, z, yaw, scale
+│           └── inspectionIdle         reduced-motion-aware idle transform
+│               ├── sleeve             jacket and front/back/spine surfaces
+│               └── pickProxy          one invisible raycast box
+├── vinyl                              independently transported pressing
+│   ├── disc, label, spindle hole
+│   ├── groove and optional marbling details
+│   └── reactive glow
+└── turntable
+    └── turntableBase
+        ├── plinth and controls
+        ├── platter                    independent spin
+        ├── tonearmPivot
+        │   └── tonearmLift            independent yaw and cue height
+        └── reactive rings
 ```
 
-The `slot` never participates in the book choreography. It anchors a volume to
-its place on the continuous shelf. The `content` group receives every
-presentation pose, so procedural geometry, custom cover images, and imported
-meshes all inherit the same behavior.
+The slot never animates locally. `content` receives the album presentation
+pose. The vinyl is attached directly to the scene because it must leave the
+sleeve and travel to a turntable outside the shelf hierarchy.
 
-An imported mesh is normalized and scaled inside `assetHolder`; it does not
-change the motion coordinate system. Likewise, a custom `coverImage` replaces
-only the procedural front texture. This separation is why asset swaps do not
-need new animation code.
+Procedural textures exist first. Optional cover, back, and label images replace
+only their corresponding texture after a successful load, so media swaps do
+not change the animation coordinate system.
 
-The `inspectionIdle` group has its origin at the book center. It adds only a
-small, slowly varying lift and rotation after inspection becomes interactive,
-so procedural and imported editions share the same centered idle motion.
+## One frame owner
 
-## One animation owner
+`RecordShelfEngine.animate()` is the only repeating animation loop. Each frame
+it:
 
-`ShelfEngine.animate()` is the only request-animation-frame loop. Each frame it:
+1. clamps `delta` to at most 50 ms;
+2. advances browse, focus, and return state;
+3. applies record and inspection-idle poses;
+4. advances or reverses cue choreography;
+5. samples preallocated analyser data and updates visual response;
+6. updates OrbitControls only while enabled;
+7. renders once;
+8. refreshes diagnostics at most twice per second.
 
-1. clamps `delta` to at most 50 ms, preventing a background-tab pause from
-   creating one giant motion step;
-2. advances the interaction state;
-3. updates selected-book and shader presentation;
-4. updates OrbitControls only while inspection is active;
-5. renders once;
-6. refreshes lightweight diagnostics twice per second.
+The audio controller returns the same analyser array on every sample. The
+engine reduces it into reusable low, mid, and high buckets and damps the visual
+response without pushing data through React.
 
-React does not receive per-frame positions. The engine only calls React when
-the active index, interaction mode, or status actually changes. This avoids a
-component render for every WebGL frame.
+## Separate state machines
 
-The high-level state machine is:
+Scene choreography and audio playback intentionally use separate state
+machines.
 
 ```mermaid
 stateDiagram-v2
     [*] --> browse
-    browse --> focusing: book is presented and focus requested
+    browse --> focusing: centered record is opened
     focusing --> inspect: focusProgress reaches 1
-    inspect --> returning: Back or Escape
+    inspect --> returning: return requested and vinyl is home
     returning --> browse: focusProgress reaches 0
 ```
 
-OrbitControls are disabled in `browse`, `focusing`, and `returning`. They turn
-on only in `inspect`, after the engine has finished framing the selected book.
-That prevents user input and scripted camera movement from fighting over the
-same transform.
+OrbitControls are disabled in `browse`, `focusing`, and `returning`. They are
+enabled only after the selected record reaches `inspect`, and disabled again
+during scripted cue motion.
 
-## Browse motion
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> loading: track source selected
+    loading --> paused: media ready
+    loading --> cueing: media ready with play intent
+    paused --> cueing: Play
+    cueing --> playing: needle contact
+    playing --> paused: Pause
+    playing --> seeking: seek input
+    paused --> seeking: seek input
+    seeking --> playing: seeked and resume intent
+    seeking --> paused: seeked without resume intent
+    playing --> stopping: Stop, end, return, or track change
+    paused --> stopping: Stop or return
+    stopping --> idle: audio stopped and vinyl returned
+    loading --> error: missing or failed source
+    error --> idle: error cleared
+```
 
-Browsing has two related values:
+The playback reducer increments a request ID for each new source. Media events
+from superseded loads are ignored, preventing a late callback from reviving an
+old track.
 
-- `targetScrollIndex` responds immediately to wheel, drag, arrow, Home, End,
-  and shelf-tick input.
-- `scrollIndex` damps toward the target and drives the horizontal position of
-  `shelfGroup`.
+Coordination rules live at the boundary:
 
-After 150 ms without pointer input, the target itself damps toward the nearest
-integer. That creates a magnetic landing on a book without making direct drag
-input feel sticky.
+- cueing begins only when scene mode is `inspect`;
+- one record and one media source are active;
+- returning while playback or cue motion is active first starts controlled
+  stop and reinsertion;
+- selecting another track during cue/play stores the request, reverses the
+  current vinyl path, then loads the pending track;
+- selecting another album while focused stores the target, returns the current
+  album, then focuses the new one;
+- missing or failed audio enters `error`, stops cue motion, and restores a
+  stable inspect pose;
+- repeated play, stop, return, and stale media events are idempotent.
 
-The visible handoff between books is deliberately discrete. The current book
-leaves before the next one enters:
+## Browse choreography
+
+All browse inputs converge on `targetScrollIndex`; `scrollIndex` damps toward
+that target and drives `shelfGroup.position.x`. After 150 ms without pointer
+input, the target damps toward the nearest integer for a magnetic landing.
+
+The visible handoff is discrete:
 
 ```mermaid
 flowchart LR
-    A["Retreat current<br>110 ms"] -->
-    B["Turn current<br>140 ms"] -->
-    C["Shelve current<br>130 ms"] -->
-    D["Extract next<br>130 ms"] -->
-    E["Turn next<br>140 ms"] -->
-    F["Settle next<br>110 ms"]
+    A["Retreat current<br/>110 ms"] -->
+    B["Turn current<br/>140 ms"] -->
+    C["Shelve current<br/>130 ms"] -->
+    D["Extract next<br/>130 ms"] -->
+    E["Turn next<br/>140 ms"] -->
+    F["Settle next<br/>110 ms"]
 ```
 
-Each phase uses smoothstep interpolation from `browseMotionPose()`. Keeping the
-phase functions pure makes the route deterministic and allows the tests to
-sample it without WebGL.
+`browseRecordMotionPose()` samples every phase from normalized progress. The
+rotation lane is derived from the largest sleeve’s rotated radius and the
+catalog collision margin. A sleeve reaches that clear lane before its yaw
+changes.
 
-The temporary `rotationLaneZ` is calculated from the largest book’s rotated
-radius, rather than being guessed for one catalog. A book retreats into that
-clear lane before turning, then approaches the shelf after its yaw is safe.
+Raycasting uses one invisible box per record. A pointer gesture must remain
+under seven pixels to count as a click, which prevents an archive swipe from
+opening a sleeve. Off-center focus intent is stored until the record has
+completed its browse handoff.
 
 ## Focus and return
 
-Opening a book takes 460 ms; returning takes 340 ms. Focus progress is
-time-based, so the duration does not depend on frame rate.
+Focus takes 500 ms and return takes 380 ms under ordinary motion. Focus first
+clears neighboring sleeves, then moves into the inspection composition and
+scales. The camera uses exponential, frame-rate-independent smoothing and a
+view offset on desktop so the record remains centered in the unobscured canvas
+beside the album panel.
 
-`focusedBookPose()` divides the opening into two overlapping intentions:
+Mobile uses a centered, smaller sleeve pose and wider camera. The compact
+details/player layout takes priority and the full turntable stage is hidden
+below the engine’s 760 px mobile breakpoint.
 
-1. During the first 55%, the book moves forward to clear its neighbors.
-2. During the final 45%, it shifts into the inspection composition and scales.
+Return follows the current live `focusProgress` toward zero. It does not reset
+the record or camera to a guessed start pose.
 
-The visual focus value uses an ease-out cubic curve, making the action feel
-decisive at the start and controlled near the endpoint. Return uses the same
-route in reverse from the live focus progress, so an interrupted state does not
-teleport.
+## Cue choreography
 
-The camera and OrbitControls both target the selected book’s exact world
-center. An asymmetric camera view offset accounts for the HTML details panel,
-placing the book in the center of the unobscured canvas without moving the
-orbit pivot away from the book. Mobile uses a centered, smaller pose and a
-slightly wider camera.
+Cue poses are pure samples from `cueMotionPose(phase, progress, layout,
+grooveProgress)`.
 
-Camera interpolation uses:
-
-```ts
-1 - Math.exp(-lambda * delta)
+```mermaid
+flowchart LR
+    A["Extract vinyl<br/>580 ms"] -->
+    B["Move above platter and settle<br/>880 ms"] -->
+    C["Spin up, position arm, lower stylus<br/>820 ms"] -->
+    D["Playing<br/>track time drives groove"] -->
+    E["Raise arm and spin down<br/>560 ms"] -->
+    F["Return to sleeve opening<br/>780 ms"] -->
+    G["Reinsert vinyl<br/>500 ms"]
 ```
 
-This is frame-rate-independent exponential smoothing. Unlike a fixed
-per-frame lerp amount, it has approximately the same feel at different refresh
-rates.
+The transport phase approaches from above before settling on the platter. The
+tonearm first rotates over the selected groove and then lowers; the
+`onNeedleContact` callback starts audible playback only when the stylus reaches
+contact.
 
-## What creates the snappy feel
+During playback, `currentTime / duration` maps to `grooveProgress`, which moves
+the tonearm from lead-in to runout. Seeking raises the arm visually and updates
+the groove target. Pausing lifts the stylus slightly and slows the platter
+without returning the pressing.
 
-Snappiness here does not mean making every duration zero. It comes from quick
-acknowledgement followed by controlled settling:
+Stop reverses from live progress:
 
-| Control | Current value | Effect |
-| --- | ---: | --- |
-| Wheel sensitivity | `0.0024` index units per delta unit | Moves the target promptly without skipping the shelf too easily |
-| Drag scale | canvas width × `0.11`, minimum `105px` | Keeps touch and mouse travel proportional to the viewport |
-| Idle snap delay | `150ms` | Lets deliberate input finish before snapping |
-| Shelf damping | `lambda 10` | Makes the shelf follow input closely |
-| Target snap damping | `lambda 8.5` | Gives the final index a softer magnetic landing |
-| Book hover damping | `lambda 12` | Makes hover feedback arrive faster than shelf movement |
-| Focus duration | `460ms` | Reads as a deliberate open action without lingering |
-| Return duration | `340ms` | Makes dismissal faster than entry |
-| Focus camera damping | `lambda 13` | Keeps camera framing close behind the book |
-| Browse camera damping | `lambda 7` | Softly restores the canonical camera |
-| Orbit damping factor | `0.075` | Removes raw pointer jitter during inspection |
+- while lowering or playing, it changes to `raise-tonearm`;
+- while moving to the turntable, it reverses into `return-to-sleeve`;
+- while extracting, it reverses into `reinsert-vinyl`.
 
-When tuning, change one layer at a time:
+After reinsertion, the engine fires `onVinylReturned` once. A queued track may
+then load, or a pending return may begin. This prevents teleports and keeps
+repeated commands safe.
 
-- Input constants change how quickly intent is collected.
-- Damping lambdas change how tightly displayed state follows intent. A larger
-  lambda is faster.
-- Phase durations change the physical choreography.
-- Easing changes acceleration and landing character.
-- Focus position and scale change composition, not timing.
+## Audio and reactive visuals
 
-Avoid replacing time-based damping with a fixed amount per frame. Avoid
-shortening the rotation phases until the cover can visibly pass through the
-next book.
+The audio graph is created lazily in a user gesture:
+
+```text
+HTMLAudioElement
+└── MediaElementAudioSourceNode
+    └── GainNode
+        └── AnalyserNode
+            └── AudioContext.destination
+```
+
+Only one element and graph are reused across tracks. Loading and seeking
+promises are cancellable; stop is promise-coalesced; fades use the gain node.
+The controller removes listeners, clears the media source, closes the context,
+and rejects pending work during disposal.
+
+While playing, analyser energy affects:
+
+- three rings around the platter;
+- platter emissive intensity;
+- pressing edge glow and scale;
+- stylus emissive intensity.
+
+Audio response falls back smoothly to zero when no analyser is available.
 
 ## Collision safety
 
-Every proposed content pose passes through `commitBookPose()`. Before applying
-it, the engine constructs a top-down oriented rectangle for the moving book and
-tests it against every other book with the separating axis theorem.
+Before the engine commits a shelf pose, it creates a top-down oriented
+rectangle containing:
 
-The footprint includes:
+- the permanent slot plus proposed local offset;
+- current yaw and presentation scale;
+- sleeve width and thickness;
+- the motion layout’s collision margin.
 
-- the catalog slot plus the proposed local offset;
-- current yaw;
-- current presentation scale;
-- book width and thickness;
-- a small collision margin.
+`recordFootprintsOverlap()` applies the separating axis theorem against every
+other record. An overlapping pose is rejected and recorded in diagnostics.
+Pure tests sample all six browse phases, desktop/mobile focus routes, and cue
+poses without requiring WebGL.
 
-If a pose would overlap another footprint, it is rejected and counted in the
-diagnostics. The tests sample all six browse phases and the focus route for
-every volume, including the largest dimensions in the catalog.
+If catalog sizes move outside the ranges in `docs/adding-records.md`, rerun the
+motion tests before changing phase constants or the collision margin.
 
-If book dimensions move outside the ranges recommended in
-`docs/adding-books.md`, rerun the tests before changing any motion constants.
-The computed rotation lane should normally adapt without manual adjustment.
+## Performance and lifecycle
 
-## 3D and HTML coordination
+- One renderer, scene, camera, ResizeObserver, raycaster, and repeating frame
+  loop have one lifecycle owner.
+- Procedural canvases become mipmapped sRGB textures with capped anisotropy.
+- Optional images replace and dispose the prior procedural GPU texture.
+- Raycasts use simple proxies and an explicit pick list.
+- Device pixel ratio is capped at `1.75` on desktop and `1.5` below 760 px.
+- One directional light casts shadows; its map is `2048²` on larger screens
+  and `1024²` below 700 px.
+- Nonselected records and shelf furniture are hidden once focus isolation is
+  established.
+- Geometries, materials, textures, controls, listeners, observers, audio
+  nodes, and renderer resources are disposed at unmount.
 
-The engine reports `browse`, `focusing`, `inspect`, or `returning` through
-`onMode`. `ProgressLibrary` turns those into `is-browsing` and `is-focused`
-classes.
+## Diagnostics
 
-CSS then handles interface-only motion:
+After client initialization:
 
-- browse caption exits left;
-- navigation arrows and shelf ticks fade away;
-- the details panel enters from the right;
-- status and independence copy fade;
-- loading and optional asset panels use their own transitions.
+```js
+window.__VINYL_LIBRARY__.diagnostics()
+```
 
-The main interface curve is `cubic-bezier(0.22, 1, 0.36, 1)`, a quick
-ease-out that visually agrees with the focus motion. Transform and opacity are
-preferred over layout-changing properties.
+The returned snapshot contains:
 
-The HTML transition durations are not used as Three.js state timers. The
-engine remains authoritative; CSS simply presents the current mode.
+- `sceneMode`, `playbackMode`, browse `motionPhase`, and `cuePhase`;
+- active and selected indices plus record count;
+- cue progress;
+- draw calls, triangles, geometries, textures, and pixel ratio;
+- collision rejects, last rejected pair, and current collision;
+- low, mid, high, and aggregate audio levels;
+- drawing-buffer and CSS canvas dimensions.
 
-## Input and picking
+The same high-level values are mirrored into canvas `data-*` attributes every
+500 ms. The command surface also exposes `browse(index)`, `focus(index)`,
+`play(trackId?)`, `pause()`, `stop()`, `resetView()`, and `returnToShelf()`.
+It does not expose mutable Three.js or Web Audio internals.
 
-All browse inputs converge on `targetScrollIndex`, so wheel, drag, keyboard,
-and shelf ticks share one motion path.
-
-Raycasting uses one invisible box per book instead of every decorative mesh.
-The engine raycasts on pointer movement or click boundaries, not on every
-animation frame. A drag must stay under seven pixels to count as a click, which
-prevents an accidental inspection after swiping.
-
-Selection is deferred until the requested book has completed the browse
-handoff and is actually presented. `pendingFocusIndex` records that intent.
-This is why clicking an off-center book feels responsive without snapping it
-through the row.
-
-## Performance choices
-
-- One renderer, scene, camera, animation loop, and ResizeObserver have one
-  lifecycle owner.
-- Procedural cover canvases become mipmapped sRGB textures with capped
-  anisotropy.
-- Optional edition textures are cached.
-- Raycasts use simple proxy boxes and an intentional pick list.
-- Device pixel ratio is capped at `1.75` on desktop and `1.5` on narrow
-  screens.
-- Shadow maps use `2048²` on larger screens and `1024²` below 700 px.
-- Nonselected books and shelf furniture are hidden after focus isolation is
-  visually established.
-- Materials, geometries, textures, controls, listeners, and the renderer are
-  disposed when the engine unmounts.
-
-The engine exposes read-only diagnostics at
-`window.__PRESS_LIBRARY__.diagnostics()` and mirrors key values into canvas
-data attributes every 500 ms. Useful fields include draw calls, triangles,
-geometry and texture counts, pixel ratio, motion phase, collision rejects, and
-the current collision pair.
-
-These diagnostics are development aids. They do not replace measured browser
-profiling when changing scene complexity.
+Diagnostics aid automated QA but do not replace browser profiling.
 
 ## Reduced motion
 
-The engine reads `prefers-reduced-motion` once at startup. Under reduced motion:
+The engine reads `prefers-reduced-motion` at startup. When enabled:
 
-- browse phases are shortened to 45% of their normal duration, with a 55 ms
-  floor;
-- focus and return complete in 80 ms;
-- shelf and camera damping are stronger;
-- inspection idle lift and rotation are disabled;
-- the animated cover sheen is disabled.
+- each browse phase uses 45% of its normal duration with a 55 ms floor;
+- focus and return use 80 ms;
+- each cue phase uses 90 ms;
+- shelf and camera response becomes stronger;
+- inspection idle lift and rotation are disabled.
 
-CSS independently reduces animations and transitions to 1 ms. The experience
-keeps its state transitions and spatial meaning without prolonged movement.
+CSS independently collapses interface transitions. State changes, needle
+ordering, error handling, and accessible announcements remain intact even when
+the choreography is shortened.
 
 ## Safe change checklist
 
-1. Keep `ShelfEngine` as the sole owner of camera and frame-level transforms.
-2. Put reusable pose or collision math in `app/book-motion.ts`.
-3. Keep asset normalization below `content`, never in the presentation wrapper.
-4. Preserve the rotation lane before changing yaw.
-5. Keep focus controls disabled until `inspect`.
-6. Test ordinary and unusually thick books.
-7. Run:
+1. Keep `RecordShelfEngine` as the sole owner of frame-level Three.js state.
+2. Keep media and Web Audio ownership inside `VinylAudioController`.
+3. Put reusable transitions in `playback-state.ts` and reusable spatial math in
+   `record-motion.ts`.
+4. Preserve the rotation lane before changing sleeve yaw.
+5. Keep OrbitControls disabled during scripted camera and cue motion.
+6. Preserve request IDs and cancellation when changing audio loading.
+7. Test ordinary and unusually thick sleeves, interrupted cue phases, missing
+   audio, repeated commands, and track changes.
+8. Run:
 
    ```bash
    npm run check
+   npm run security:audit
    ```
 
-8. For rendering changes, request and run the optional desktop browser smoke
-   test separately. Mobile QA requires its own approval.
+9. For rendering changes, verify the production build with real pointer,
+   keyboard, wheel, WebGL, and audio input on desktop and around 390 × 844.
+10. Inspect `window.__VINYL_LIBRARY__.diagnostics()`, the browser console,
+    network requests, canvas pixels, resize behavior, and reduced motion.

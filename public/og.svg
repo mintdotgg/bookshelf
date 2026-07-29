@@ -1,98 +1,48 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1024" viewBox="0 0 1536 1024">
   <defs>
     <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f4efe5"/>
-      <stop offset="1" stop-color="#e8dfd0"/>
+      <stop stop-color="#e9e1d4"/>
+      <stop offset="1" stop-color="#cfc4b3"/>
     </linearGradient>
-    <linearGradient id="shelf" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#795643"/>
-      <stop offset="1" stop-color="#4d3429"/>
-    </linearGradient>
+    <radialGradient id="vinyl">
+      <stop offset=".12" stop-color="#332d2a"/>
+      <stop offset=".16" stop-color="#0f1010"/>
+      <stop offset=".5" stop-color="#242424"/>
+      <stop offset="1" stop-color="#090909"/>
+    </radialGradient>
     <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
-      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#30231d" flood-opacity=".2"/>
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#191512" flood-opacity=".28"/>
     </filter>
   </defs>
-
   <rect width="1536" height="1024" fill="url(#paper)"/>
-  <circle cx="1340" cy="120" r="240" fill="#d9c7a5" opacity=".22"/>
-  <circle cx="80" cy="920" r="280" fill="#bd6e52" opacity=".08"/>
-
-  <g transform="translate(104 126)">
-    <text x="0" y="0" fill="#6a5446" font-family="Arial, sans-serif" font-size="20" letter-spacing="7">
-      AN OPEN 3D BOOKSHELF
+  <path d="M0 820C330 720 505 900 790 802s487-98 746 8v214H0z" fill="#b8aa98" opacity=".28"/>
+  <g transform="translate(112 112)">
+    <text fill="#302b27" font-family="Arial, sans-serif" font-size="24" letter-spacing="9">NEEDLE ARCHIVE</text>
+    <path d="M0 46h390" stroke="#8a7b6b" stroke-width="2"/>
+    <text y="182" fill="#26221f" font-family="Georgia, serif" font-size="108">
+      <tspan x="0">A private listening</tspan>
+      <tspan x="0" dy="112">room in motion.</tspan>
     </text>
-    <path d="M0 50h330" stroke="#ad9b87" stroke-width="2"/>
-    <text x="0" y="158" fill="#302923" font-family="Georgia, serif" font-size="90">
-      <tspan x="0" dy="0">The Complete</tspan>
-      <tspan x="0" dy="96">Shelf</tspan>
+    <text x="6" y="468" fill="#60564e" font-family="Arial, sans-serif" font-size="26" letter-spacing="1.5">
+      BROWSE · INSPECT · CUE · LISTEN
     </text>
-    <text x="4" y="404" fill="#6a5b50" font-family="Arial, sans-serif" font-size="25">
-      <tspan x="4" dy="0">Add your metadata.</tspan>
-      <tspan x="4" dy="42">Bring your own covers.</tspan>
-      <tspan x="4" dy="42">Make the collection yours.</tspan>
+    <text x="6" y="532" fill="#73675d" font-family="Arial, sans-serif" font-size="21">
+      Eight original pressings. Sixteen synthesized previews.
     </text>
-    <g transform="translate(4 610)">
-      <rect width="238" height="54" rx="27" fill="#302923"/>
-      <text x="119" y="35" text-anchor="middle" fill="#f4efe5" font-family="Arial, sans-serif" font-size="16" letter-spacing="3">
-        THREE.JS TEMPLATE
-      </text>
-    </g>
   </g>
-
-  <g transform="translate(666 196)" filter="url(#shadow)">
-    <rect x="-28" y="615" width="836" height="54" rx="12" fill="url(#shelf)"/>
-    <rect x="-8" y="602" width="796" height="22" rx="8" fill="#8e6953"/>
-
-    <g transform="translate(0 8)">
-      <rect x="0" y="86" width="92" height="508" rx="9" fill="#2c5570"/>
-      <rect x="15" y="112" width="62" height="5" fill="#d5b66e"/>
-      <rect x="15" y="560" width="62" height="5" fill="#d5b66e"/>
-      <path d="M30 170h32v270H30z" fill="none" stroke="#e8dfd0" stroke-width="3" opacity=".7"/>
+  <g transform="translate(1052 522)" filter="url(#shadow)">
+    <rect x="-298" y="-242" width="472" height="472" rx="14" fill="#263932" transform="rotate(-7)"/>
+    <path d="M-255-176h350M-255-140h240M-255 142h320" stroke="#d7c9ad" stroke-width="8" opacity=".78" transform="rotate(-7)"/>
+    <circle r="242" fill="url(#vinyl)"/>
+    <g fill="none" stroke="#817b72" opacity=".22">
+      <circle r="214"/><circle r="194"/><circle r="174"/><circle r="154"/><circle r="134"/>
     </g>
-
-    <g transform="translate(104 0) rotate(-2 55 594)">
-      <rect x="0" y="0" width="110" height="594" rx="10" fill="#9d4f3e"/>
-      <path d="M24 70h62M24 520h62" stroke="#f0d6a1" stroke-width="6"/>
-      <circle cx="55" cy="294" r="30" fill="none" stroke="#f0d6a1" stroke-width="4"/>
-    </g>
-
-    <g transform="translate(224 60)">
-      <rect x="0" y="0" width="78" height="534" rx="8" fill="#ded3b7"/>
-      <path d="M20 70h38v360H20z" fill="none" stroke="#546d65" stroke-width="3"/>
-      <path d="M20 180h38M20 300h38" stroke="#546d65" stroke-width="3"/>
-    </g>
-
-    <g transform="translate(314 118)">
-      <rect x="0" y="0" width="96" height="476" rx="8" fill="#e2a447"/>
-      <path d="M20 54h56M20 76h56" stroke="#744432" stroke-width="5"/>
-      <path d="M48 132v250M22 258h52" stroke="#744432" stroke-width="3" opacity=".8"/>
-    </g>
-
-    <g transform="translate(422 36) rotate(2 50 558)">
-      <rect x="0" y="0" width="100" height="558" rx="9" fill="#466455"/>
-      <path d="M22 65c54 60 54 360 0 424M78 65c-54 60-54 360 0 424" fill="none" stroke="#d4c18b" stroke-width="4"/>
-    </g>
-
-    <g transform="translate(534 98)">
-      <rect x="0" y="0" width="74" height="496" rx="8" fill="#3e354f"/>
-      <circle cx="37" cy="116" r="17" fill="none" stroke="#c5a7cd" stroke-width="3"/>
-      <circle cx="37" cy="248" r="17" fill="none" stroke="#c5a7cd" stroke-width="3"/>
-      <circle cx="37" cy="380" r="17" fill="none" stroke="#c5a7cd" stroke-width="3"/>
-    </g>
-
-    <g transform="translate(620 48)">
-      <rect x="0" y="0" width="102" height="546" rx="9" fill="#be7058"/>
-      <path d="M21 74h60v390H21z" fill="none" stroke="#f3dfb7" stroke-width="3"/>
-      <path d="M21 150l60 72-60 72 60 72" fill="none" stroke="#f3dfb7" stroke-width="4"/>
-    </g>
-
-    <g transform="translate(734 132)">
-      <rect x="0" y="0" width="58" height="462" rx="7" fill="#6b88a5"/>
-      <path d="M17 55h24M17 405h24" stroke="#f2e8d6" stroke-width="4"/>
-    </g>
+    <circle r="69" fill="#b75138"/>
+    <circle r="8" fill="#d9d1c4"/>
+    <path d="M122-212l10 7-218 377-10-6z" fill="#bdab91"/>
+    <circle cx="-91" cy="171" r="18" fill="#302b27"/>
   </g>
-
-  <text x="1432" y="942" text-anchor="end" fill="#7d6a5b" font-family="Arial, sans-serif" font-size="16" letter-spacing="4">
-    PROCEDURAL BY DEFAULT
+  <text x="1408" y="934" text-anchor="end" fill="#645a51" font-family="Arial, sans-serif" font-size="18" letter-spacing="5">
+    INTERACTIVE THREE.JS COLLECTION
   </text>
 </svg>

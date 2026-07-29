@@ -46,6 +46,5 @@ next-env.d.ts
 /.local/
 /.openai/hosting.json
 
-# Optional third-party edition assets are intentionally not distributed.
-# Contributor-owned covers belong under /public/books/ instead.
-/public/assets/stripe-press/
+# Generated preview audio is committed as a rights-safe starter catalog.
+# Put contributor-owned replacement media under /public/records/.
