@@ -71,10 +71,10 @@ scene
 │   └── reactive glow
 └── turntable
     └── turntableBase
-        ├── plinth and controls
-        ├── platter                    independent spin
-        ├── tonearmPivot
-        │   └── tonearmLift            independent yaw and cue height
+        ├── layered plinth, isolation feet, and controls
+        ├── platterAssembly            independent spin, mat, rim, strobe dots
+        ├── tonearmPivot               gimbal yaw
+        │   └── tonearmLift            cue height, curved arm, cartridge, stylus
         └── reactive rings
 ```
 
@@ -98,7 +98,8 @@ it:
 5. samples preallocated analyser data and updates visual response;
 6. updates OrbitControls only while enabled;
 7. renders once;
-8. refreshes diagnostics at most twice per second.
+8. projects the label anchor into CSS pixels for the semantic play control;
+9. refreshes diagnostics at most twice per second.
 
 The audio controller returns the same analyser array on every sample. The
 engine reduces it into reusable low, mid, and high buckets and damps the visual
@@ -170,12 +171,12 @@ The visible handoff is discrete:
 
 ```mermaid
 flowchart LR
-    A["Retreat current<br/>110 ms"] -->
-    B["Turn current<br/>140 ms"] -->
-    C["Shelve current<br/>130 ms"] -->
-    D["Extract next<br/>130 ms"] -->
-    E["Turn next<br/>140 ms"] -->
-    F["Settle next<br/>110 ms"]
+    A["Retreat current<br/>180 ms"] -->
+    B["Turn current<br/>220 ms"] -->
+    C["Shelve current<br/>200 ms"] -->
+    D["Extract next<br/>200 ms"] -->
+    E["Turn next<br/>220 ms"] -->
+    F["Settle next<br/>240 ms"]
 ```
 
 `browseRecordMotionPose()` samples every phase from normalized progress. The
@@ -192,13 +193,15 @@ completed its browse handoff.
 
 Focus takes 500 ms and return takes 380 ms under ordinary motion. Focus first
 clears neighboring sleeves, then moves into the inspection composition and
-scales. The camera uses exponential, frame-rate-independent smoothing and a
-view offset on desktop so the record remains centered in the unobscured canvas
-beside the album panel.
+scales. Its final yaw is exactly zero and the camera optical axis stays parallel
+to the jacket normal, so the sleeve is face-on even though the composition
+places it left of center. The camera uses exponential, frame-rate-independent
+smoothing and a view offset on desktop to reserve distinct sleeve, vinyl,
+turntable, player, and album-panel zones.
 
 Mobile uses a centered, smaller sleeve pose and wider camera. The compact
-details/player layout takes priority and the full turntable stage is hidden
-below the engine’s 760 px mobile breakpoint.
+details/player layout takes priority and the turntable stage is scaled at the
+engine’s 760 px mobile breakpoint.
 
 Return follows the current live `focusProgress` toward zero. It does not reset
 the record or camera to a guessed start pose.
@@ -223,6 +226,12 @@ The transport phase approaches from above before settling on the platter. The
 tonearm first rotates over the selected groove and then lowers; the
 `onNeedleContact` callback starts audible playback only when the stylus reaches
 contact.
+
+In idle inspection the vinyl is already staged far enough out of the sleeve for
+its center label to remain visible. `RecordShelfEngine` projects that label
+position after the single render and updates one semantic HTML play button
+imperatively, avoiding frame-level React state. Cueing continues from the live
+staged pose rather than snapping the vinyl back into the jacket.
 
 During playback, `currentTime / duration` maps to `grooveProgress`, which moves
 the tonearm from lead-in to runout. Seeking raises the arm visually and updates

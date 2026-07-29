@@ -16,14 +16,16 @@ are authorized to distribute.
   deliberate air gap between every shelved sleeve.
 - Preserve a collision-safe retreat, rotate, shelve, extract, rotate, settle
   handoff between records.
-- Inspect square sleeves and detailed pressings with orbit, pan, zoom, and a
-  reset view.
+- Open every sleeve into a deterministic face-on inspection composition, then
+  orbit, pan, zoom, or restore the exact reset view.
 - Replace generated front, back, and label art independently; failed optional
   images fall back to deterministic procedural artwork.
 - Load one preview source at a time through a reusable media element and Web
   Audio analyser.
 - Remove the vinyl, move it to the platter, lower the tonearm, follow the groove
   while playing, and reverse the sequence on stop.
+- Start playback from an accessible control anchored to the exposed record
+  label, then hand off to the persistent transport controls.
 - Pause, seek, change tracks, adjust volume, or return to the shelf without
   creating competing animation loops.
 - Respect keyboard navigation, visible focus, touch input, safe areas, and
@@ -65,7 +67,8 @@ In browse mode:
 In inspect mode:
 
 - Drag to orbit, scroll to zoom, and use **Reset view** to restore framing.
-- Select a track, then use Play/Pause, Stop, seek, and volume controls.
+- Select a track, then play from the record label or use the persistent
+  Play/Pause, Stop, seek, and volume controls.
 - Press Escape or choose **Return to archive**. Active playback is stopped and
   the vinyl is reinserted before the sleeve returns to the shelf.
 
@@ -102,6 +105,8 @@ state:
   choreography, diagnostics, and Three.js disposal.
 - `app/record-motion.ts` contains pure browse, focus, collision, vinyl, and
   tonearm pose functions.
+- `app/turntable-model.ts` builds the articulated hi-fi deck from named,
+  replaceable functional parts.
 - `app/audio/playback-state.ts` contains the pure playback reducer.
 - `app/audio/VinylAudioController.ts` owns one `HTMLAudioElement` and its lazy
   Web Audio source, gain, and analyser graph.

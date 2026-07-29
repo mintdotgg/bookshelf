@@ -67,6 +67,7 @@ type LibraryCommands = {
 
 export function VinylLibrary() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const vinylPlayRef = useRef<HTMLButtonElement>(null);
   const engineRef = useRef<RecordShelfEngine | null>(null);
   const audioRef = useRef<VinylAudioController | null>(null);
   const playbackRef = useRef<PlaybackState>(initialPlaybackState());
@@ -275,6 +276,7 @@ export function VinylLibrary() {
     let cancelled = false;
     let engine: RecordShelfEngine | null = null;
     let audio: VinylAudioController | null = null;
+    const vinylPlayControl = vinylPlayRef.current;
 
     async function start() {
       if (!canvasRef.current) return;
@@ -401,6 +403,17 @@ export function VinylLibrary() {
             setStatus("Pressing returned to its sleeve");
           }
         },
+        onVinylAnchor: (anchor) => {
+          const control = vinylPlayRef.current;
+          if (!control) return;
+          if (!anchor) {
+            control.dataset.anchored = "false";
+            return;
+          }
+          control.style.setProperty("--vinyl-play-x", `${anchor.x}px`);
+          control.style.setProperty("--vinyl-play-y", `${anchor.y}px`);
+          control.dataset.anchored = String(anchor.visible);
+        },
       });
       engineRef.current = engine;
       engine.setAnalyserReader((target) => {
@@ -450,6 +463,9 @@ export function VinylLibrary() {
           __VINYL_LIBRARY__?: unknown;
         }
       ).__VINYL_LIBRARY__;
+      if (vinylPlayControl) {
+        vinylPlayControl.dataset.anchored = "false";
+      }
     };
   }, [dispatchPlayback, loadTrack]);
 
@@ -513,6 +529,27 @@ export function VinylLibrary() {
         tabIndex={0}
         aria-label={`Interactive three-dimensional archive of ${recordCatalog.length} records. Drag, scroll, or use the arrow keys to browse. Press Enter to inspect the selected sleeve.`}
       />
+
+      <button
+        ref={vinylPlayRef}
+        type="button"
+        className={`vinyl-play-button ${isBusy ? "is-busy" : ""}`}
+        data-anchored="false"
+        data-testid="vinyl-play"
+        aria-label={
+          selectedTrack
+            ? `Play ${selectedTrack.title} from ${selectedRecord?.title ?? "the selected record"}`
+            : "Select a track to play"
+        }
+        disabled={!selectedTrack || isBusy || sceneMode !== "inspect"}
+        onClick={() => playTrack()}
+      >
+        <span className="vinyl-play-button__grooves" aria-hidden="true" />
+        <span className="vinyl-play-button__icon" aria-hidden="true" />
+        <span className="sr-only">
+          {isBusy ? "Preparing playback" : "Play selected track"}
+        </span>
+      </button>
 
       <header className="archive-header">
         <div

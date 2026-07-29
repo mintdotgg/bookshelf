@@ -32,6 +32,7 @@ import {
   writeBandLevels,
   type AudioBandLayout,
 } from "./audio/audio-visualizer";
+import { createTurntableModel } from "./turntable-model";
 
 export type SceneMode = "browse" | "focusing" | "inspect" | "returning";
 export type VisualPlaybackMode =
@@ -51,6 +52,13 @@ type EngineCallbacks = {
   onReady: () => void;
   onNeedleContact: () => void;
   onVinylReturned: () => void;
+  onVinylAnchor: (anchor: VinylScreenAnchor | null) => void;
+};
+
+export type VinylScreenAnchor = {
+  x: number;
+  y: number;
+  visible: boolean;
 };
 
 type RuntimeRecord = {
@@ -90,9 +98,10 @@ const focusInDuration = 0.5;
 const focusOutDuration = 0.38;
 const desktopFocusX = -1.08;
 const desktopFocusZ = 1.5;
-const desktopFocusScale = 1.03;
+const desktopFocusScale = 0.84;
 const mobileFocusZ = 1.18;
 const mobileFocusScale = 0.76;
+const idleVinylReveal = 0.88;
 const cueDurations: Record<Exclude<CueMotionPhase, "playing">, number> = {
   "extract-vinyl": 0.58,
   "transport-to-turntable": 0.88,
@@ -690,202 +699,18 @@ export class RecordShelfEngine {
   }
 
   private createTurntable() {
-    this.turntable.name = "turntableStage";
-    this.turntable.visible = false;
-    this.turntable.position.set(1.3, 0.11, 0.54);
+    const model = createTurntableModel();
+    this.turntable = model.root;
+    this.turntableBase = model.reveal;
+    this.platter = model.platter;
+    this.platterMat = model.platterMaterial;
+    this.tonearmPivot = model.tonearmPivot;
+    this.tonearmLift = model.tonearmLift;
+    this.stylus = model.stylus;
+    this.visualizerRings = model.visualizerRings;
+    this.turntable.position.set(1.98, -0.03, 0.08);
+    this.turntable.scale.setScalar(0.62);
     this.scene.add(this.turntable);
-    this.turntable.add(this.turntableBase);
-
-    const baseMaterial = new THREE.MeshPhysicalMaterial({
-      color: "#1d211d",
-      roughness: 0.42,
-      metalness: 0.14,
-      clearcoat: 0.48,
-      clearcoatRoughness: 0.34,
-    });
-    const woodMaterial = new THREE.MeshPhysicalMaterial({
-      color: "#593b2e",
-      roughness: 0.58,
-      metalness: 0.03,
-      clearcoat: 0.16,
-      clearcoatRoughness: 0.5,
-    });
-    const metalMaterial = new THREE.MeshPhysicalMaterial({
-      color: "#a99d89",
-      roughness: 0.25,
-      metalness: 0.88,
-      clearcoat: 0.28,
-      clearcoatRoughness: 0.26,
-    });
-
-    const woodPlinth = new THREE.Mesh(
-      new RoundedBoxGeometry(3.65, 0.42, 2.55, 7, 0.11),
-      woodMaterial,
-    );
-    woodPlinth.name = "walnutPlinth";
-    woodPlinth.castShadow = true;
-    woodPlinth.receiveShadow = true;
-    this.turntableBase.add(woodPlinth);
-
-    const inset = new THREE.Mesh(
-      new RoundedBoxGeometry(3.38, 0.2, 2.28, 6, 0.08),
-      baseMaterial,
-    );
-    inset.position.y = 0.27;
-    inset.castShadow = true;
-    inset.receiveShadow = true;
-    this.turntableBase.add(inset);
-
-    const feetGeometry = new THREE.CylinderGeometry(0.18, 0.21, 0.22, 32);
-    [
-      [-1.42, -0.27, -0.9],
-      [1.42, -0.27, -0.9],
-      [-1.42, -0.27, 0.9],
-      [1.42, -0.27, 0.9],
-    ].forEach(([x, y, z]) => {
-      const foot = new THREE.Mesh(feetGeometry, baseMaterial);
-      foot.position.set(x, y, z);
-      foot.castShadow = true;
-      this.turntableBase.add(foot);
-    });
-
-    this.platter.position.set(-0.55, 0.48, 0);
-    this.turntable.add(this.platter);
-    this.platterMat = new THREE.MeshPhysicalMaterial({
-      color: "#171916",
-      roughness: 0.3,
-      metalness: 0.62,
-      clearcoat: 0.52,
-      clearcoatRoughness: 0.2,
-      emissive: new THREE.Color("#a13f2f"),
-      emissiveIntensity: 0.02,
-    });
-    const platterDisc = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.04, 1.04, 0.18, 96),
-      this.platterMat,
-    );
-    platterDisc.name = "platter";
-    platterDisc.castShadow = true;
-    platterDisc.receiveShadow = true;
-    this.platter.add(platterDisc);
-
-    for (let ring = 0; ring < 6; ring += 1) {
-      const detail = new THREE.Mesh(
-        new THREE.TorusGeometry(0.98 - ring * 0.028, 0.005, 6, 96),
-        metalMaterial,
-      );
-      detail.rotation.x = Math.PI / 2;
-      detail.position.y = 0.1;
-      this.platter.add(detail);
-    }
-
-    const spindle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.035, 0.035, 0.28, 32),
-      metalMaterial,
-    );
-    spindle.position.y = 0.18;
-    this.platter.add(spindle);
-
-    const pitchSlot = new THREE.Mesh(
-      new RoundedBoxGeometry(0.12, 0.035, 0.76, 3, 0.018),
-      new THREE.MeshStandardMaterial({
-        color: "#0b0c0b",
-        roughness: 0.55,
-        metalness: 0.55,
-      }),
-    );
-    pitchSlot.position.set(-1.45, 0.4, 0.15);
-    this.turntable.add(pitchSlot);
-    const pitchFader = new THREE.Mesh(
-      new RoundedBoxGeometry(0.28, 0.09, 0.16, 3, 0.025),
-      metalMaterial,
-    );
-    pitchFader.position.set(-1.45, 0.45, 0.05);
-    this.turntable.add(pitchFader);
-
-    const powerButton = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.11, 0.11, 0.08, 36),
-      metalMaterial,
-    );
-    powerButton.position.set(-1.45, 0.45, 0.86);
-    this.turntable.add(powerButton);
-
-    const armBase = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.27, 0.31, 0.28, 48),
-      baseMaterial,
-    );
-    armBase.position.set(1.08, 0.49, -0.58);
-    armBase.castShadow = true;
-    this.turntable.add(armBase);
-
-    this.tonearmPivot.position.set(1.08, 0.68, -0.58);
-    this.turntable.add(this.tonearmPivot);
-    this.tonearmPivot.add(this.tonearmLift);
-
-    const counterweight = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.15, 0.15, 0.45, 36),
-      metalMaterial,
-    );
-    counterweight.rotation.z = Math.PI / 2;
-    counterweight.position.x = -0.18;
-    this.tonearmLift.add(counterweight);
-
-    const arm = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.028, 0.028, 1.46, 20),
-      metalMaterial,
-    );
-    arm.rotation.z = Math.PI / 2;
-    arm.position.x = -0.84;
-    arm.castShadow = true;
-    this.tonearmLift.add(arm);
-
-    const headshell = new THREE.Mesh(
-      new RoundedBoxGeometry(0.35, 0.075, 0.19, 3, 0.025),
-      baseMaterial,
-    );
-    headshell.position.x = -1.56;
-    this.tonearmLift.add(headshell);
-
-    this.stylus = new THREE.Mesh(
-      new THREE.BoxGeometry(0.035, 0.12, 0.025),
-      new THREE.MeshStandardMaterial({
-        color: "#a13f2f",
-        roughness: 0.4,
-        emissive: "#a13f2f",
-        emissiveIntensity: 0.35,
-      }),
-    );
-    this.stylus.position.set(-1.66, -0.08, 0);
-    this.tonearmLift.add(this.stylus);
-
-    for (let index = 0; index < 3; index += 1) {
-      const ring = new THREE.Mesh(
-        new THREE.RingGeometry(1.14 + index * 0.12, 1.16 + index * 0.12, 96),
-        new THREE.MeshBasicMaterial({
-          color: index === 1 ? "#b18a52" : "#a13f2f",
-          transparent: true,
-          opacity: 0,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-        }),
-      );
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.set(-0.55, 0.6 + index * 0.008, 0);
-      this.turntable.add(ring);
-      this.visualizerRings.push(ring);
-    }
-
-    const badge = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.68, 0.18),
-      new THREE.MeshBasicMaterial({
-        color: "#d6c9b3",
-        transparent: true,
-        opacity: 0.55,
-      }),
-    );
-    badge.rotation.x = -Math.PI / 2;
-    badge.position.set(0.95, 0.51, 0.89);
-    this.turntable.add(badge);
   }
 
   private bindEvents() {
@@ -1192,7 +1017,6 @@ export class RecordShelfEngine {
     if (this.isDisposed) return;
     this.animationFrame = requestAnimationFrame(this.animate);
     const timestamp = performance.now();
-    const elapsed = timestamp / 1000;
     const delta = clamp(
       (timestamp - this.lastTimestamp) / 1000 || 1 / 60,
       0,
@@ -1201,11 +1025,12 @@ export class RecordShelfEngine {
     this.lastTimestamp = timestamp;
 
     this.updateState(delta, timestamp);
-    this.updateRecords(delta, elapsed);
+    this.updateRecords(delta);
     this.updateCue(delta);
     this.updateAudioVisuals(delta);
     if (this.controls.enabled) this.controls.update();
     this.renderer.render(this.scene, this.camera);
+    this.updateVinylAnchor();
     this.updateDiagnostics(timestamp);
   };
 
@@ -1294,7 +1119,7 @@ export class RecordShelfEngine {
     if (this.mode === "browse") this.updateBrowseMotion(delta);
   }
 
-  private updateRecords(delta: number, elapsed: number) {
+  private updateRecords(delta: number) {
     const motionFocus =
       this.mode === "returning"
         ? this.focusProgress
@@ -1334,22 +1159,10 @@ export class RecordShelfEngine {
       const isSelected = record.index === this.selectedIndex;
       record.content.visible = !isolated || isSelected;
       record.content.position.y = isSelected ? motionFocus * 0.04 : 0;
-      const idleTarget =
-        isSelected &&
-        this.mode === "inspect" &&
-        !this.reducedMotion &&
-        this.cuePhase === null
-          ? 1
-          : 0;
+      const idleTarget = 0;
       record.idleAmount = damp(record.idleAmount, idleTarget, 5, delta);
-      const idlePhase = elapsed * 0.76 + record.index * 0.39;
-      record.inspectionIdle.position.y =
-        Math.sin(idlePhase) * 0.012 * record.idleAmount;
-      record.inspectionIdle.rotation.set(
-        Math.sin(idlePhase * 0.73 + 0.8) * 0.004 * record.idleAmount,
-        Math.sin(idlePhase * 0.61) * 0.008 * record.idleAmount,
-        Math.sin(idlePhase * 0.89 + 1.7) * 0.004 * record.idleAmount,
-      );
+      record.inspectionIdle.position.y = 0;
+      record.inspectionIdle.rotation.set(0, 0, 0);
 
       if (!isSelected) record.vinyl.visible = false;
       const hoverScale = 1 + record.hover * 0.008;
@@ -1364,6 +1177,12 @@ export class RecordShelfEngine {
     selected.inspectionIdle.getWorldPosition(sleeveWorld);
     const platterWorld = new THREE.Vector3();
     this.platter.getWorldPosition(platterWorld);
+    const turntableScale = this.turntable.getWorldScale(
+      new THREE.Vector3(),
+    ).x;
+    const selectedScale = selected.content.getWorldScale(
+      new THREE.Vector3(),
+    ).x;
     return {
       sleevedVinyl: {
         x: sleeveWorld.x + 0.12,
@@ -1381,7 +1200,7 @@ export class RecordShelfEngine {
         pitch: Math.PI / 2,
         yaw: -0.08,
         roll: -0.05,
-        scale: 0.94,
+        scale: selectedScale * 0.93,
       },
       turntableApproachVinyl: {
         x: platterWorld.x,
@@ -1390,7 +1209,7 @@ export class RecordShelfEngine {
         pitch: 0.18,
         yaw: 0.08,
         roll: 0,
-        scale: this.isMobile() ? 0.48 : 1,
+        scale: turntableScale,
       },
       platterVinyl: {
         x: platterWorld.x,
@@ -1399,7 +1218,7 @@ export class RecordShelfEngine {
         pitch: 0,
         yaw: 0,
         roll: 0,
-        scale: this.isMobile() ? 0.44 : 1,
+        scale: turntableScale,
       },
       tonearmRestYaw: -0.34,
       tonearmLeadInYaw: 0.13,
@@ -1415,9 +1234,14 @@ export class RecordShelfEngine {
     const selected = this.runtimeRecords[this.selectedIndex];
 
     if (this.cuePhase === null) {
-      selected.vinyl.visible = this.mode === "inspect" && !this.isMobile();
+      selected.vinyl.visible = this.mode === "inspect";
       if (selected.vinyl.visible) {
-        const peek = cueMotionPose("extract-vinyl", 0.14, layout, 0);
+        const peek = cueMotionPose(
+          "extract-vinyl",
+          idleVinylReveal,
+          layout,
+          0,
+        );
         this.applyCuePose(selected, peek, delta);
       }
       return;
@@ -1589,18 +1413,49 @@ export class RecordShelfEngine {
     compositionProgress = 1,
   ) {
     const isMobile = this.isMobile();
-    const focusDistance = isMobile ? 6.7 : 6.25;
+    const focusDistance = isMobile ? 6.7 : 9;
     this.applyFocusViewOffset(compositionProgress);
     this.focusCameraTarget.set(
-      worldPosition.x + (isMobile ? 0 : 0.52),
-      worldPosition.y - (isMobile ? 0.03 : 0.12),
-      worldPosition.z + (isMobile ? 0 : 0.05),
+      worldPosition.x + (isMobile ? 0 : 1.68),
+      worldPosition.y - (isMobile ? 0.08 : 0.22),
+      worldPosition.z,
     );
     this.focusCameraPosition.set(
-      this.focusCameraTarget.x + (isMobile ? 0 : 0.25),
-      this.focusCameraTarget.y + (isMobile ? 0.62 : 0.5),
+      this.focusCameraTarget.x,
+      this.focusCameraTarget.y,
       this.focusCameraTarget.z + focusDistance,
     );
+  }
+
+  private updateVinylAnchor() {
+    if (
+      this.selectedIndex === null ||
+      this.mode !== "inspect" ||
+      this.cuePhase !== null
+    ) {
+      this.callbacks.onVinylAnchor?.(null);
+      return;
+    }
+    const selected = this.runtimeRecords[this.selectedIndex];
+    if (!selected.vinyl.visible) {
+      this.callbacks.onVinylAnchor?.(null);
+      return;
+    }
+    const projected = new THREE.Vector3();
+    selected.vinylLabel.getWorldPosition(projected);
+    projected.project(this.camera);
+    const visible =
+      projected.z > -1 &&
+      projected.z < 1 &&
+      projected.x > -1.08 &&
+      projected.x < 1.08 &&
+      projected.y > -1.08 &&
+      projected.y < 1.08;
+    this.callbacks.onVinylAnchor?.({
+      x: (projected.x * 0.5 + 0.5) * this.canvas.clientWidth,
+      y: (-projected.y * 0.5 + 0.5) * this.canvas.clientHeight,
+      visible,
+    });
   }
 
   private applyFocusViewOffset(progress: number) {
@@ -1641,11 +1496,13 @@ export class RecordShelfEngine {
     this.camera.fov = width < 600 ? 34 : width < 920 ? 31 : 28;
     this.camera.updateProjectionMatrix();
     this.turntable.position.set(
-      width < 760 ? 0.16 : width < 980 ? 1.05 : 1.34,
-      width < 760 ? 2.36 : 0.11,
-      width < 760 ? 0.34 : 0.54,
+      width < 760 ? 0.42 : width < 980 ? 1.68 : 1.98,
+      width < 760 ? 2.42 : -0.03,
+      width < 760 ? 0.18 : 0.08,
     );
-    this.turntable.scale.setScalar(width < 760 ? 0.42 : 1);
+    this.turntable.scale.setScalar(
+      width < 760 ? 0.36 : width < 980 ? 0.55 : 0.62,
+    );
     if (this.mode === "browse" && this.focusProgress < 0.01) {
       this.camera.clearViewOffset();
       this.camera.position.copy(this.responsiveBrowseCamera);
@@ -1798,7 +1655,7 @@ export class RecordShelfEngine {
     if (this.cuePhase === "playing") return true;
     this.controls.enabled = false;
     this.cuePhase = "extract-vinyl";
-    this.cueProgress = 0;
+    this.cueProgress = idleVinylReveal;
     this.grooveProgress = clamp(grooveProgress, 0, 1);
     this.cueContactFired = false;
     this.vinylReturnFired = false;

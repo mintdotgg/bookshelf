@@ -817,6 +817,61 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
   );
 });
 
+test("inspection settles to an exact face-on sleeve pose", async () => {
+  const {
+    createRecordMotionLayout,
+    focusedRecordPose,
+    presentedRecordPose,
+  } = await import("../app/record-motion.ts");
+  const layout = createRecordMotionLayout([
+    { width: 2.2, thickness: 0.096 },
+  ]);
+  const presented = presentedRecordPose(layout);
+  const focused = focusedRecordPose(1, layout, -1.08, 1.5, 1.03);
+
+  assert.notEqual(presented.yaw, 0);
+  assert.equal(focused.yaw, 0);
+  assert.equal(focused.x, -1.08);
+  assert.equal(focused.z, 1.5);
+  assert.equal(focused.scale, 1.03);
+});
+
+test("turntable model exposes articulated premium playback parts", async () => {
+  const { createTurntableModel } = await import("../app/turntable-model.ts");
+  const model = createTurntableModel();
+  const requiredParts = [
+    "walnutPlinth",
+    "brushedTopPlate",
+    "platterAssembly",
+    "platterStrobeDots",
+    "spindle",
+    "tonearmBase",
+    "tonearmGimbalOuter",
+    "tonearmPivot",
+    "tonearmLift",
+    "curvedTonearmTube",
+    "headshell",
+    "cartridge",
+    "stylus",
+  ];
+
+  requiredParts.forEach((name) => {
+    assert.ok(model.root.getObjectByName(name), `missing ${name}`);
+  });
+  assert.notEqual(model.platter, model.tonearmPivot);
+  assert.equal(model.tonearmPivot.children.includes(model.tonearmLift), true);
+  assert.equal(model.visualizerRings.length, 3);
+
+  let meshes = 0;
+  let instancedMeshes = 0;
+  model.root.traverse((object) => {
+    if (object.isMesh) meshes += 1;
+    if (object.isInstancedMesh) instancedMeshes += 1;
+  });
+  assert.ok(meshes >= 35, `expected authored detail, received ${meshes} meshes`);
+  assert.ok(instancedMeshes >= 2, "repeated premium detail should be instanced");
+});
+
 test("engine owns the only animation loop and audio stays frame-loop free", async () => {
   const [engine, audioController, audioVisualizer, library] = await Promise.all([
     readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
