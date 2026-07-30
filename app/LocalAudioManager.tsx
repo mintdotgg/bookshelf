@@ -1,6 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import type { CatalogRecord, RecordTrack } from "./record-catalog";
 import {
   downloadLocalTrackFromYouTube,
@@ -391,7 +396,11 @@ export function LocalAudioManager({
         {progress ? (
           <div className="local-audio-manager__progress" role="status">
             <span>
-              <i style={{ width: `${progressPercent}%` }} />
+              <i
+                style={{
+                  "--progress-scale": progressPercent / 100,
+                } as CSSProperties}
+              />
             </span>
             <p>
               {progress.label}

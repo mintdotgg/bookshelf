@@ -487,9 +487,6 @@ export function LocalLibraryImport({
           <span aria-hidden="true">→</span>
         </button>
 
-        <p className="local-import__footnote">
-          Helper: <code>{localLibraryOrigin}</code> · files stay on this computer
-        </p>
       </section>
     </div>
   );

@@ -181,13 +181,16 @@ export type VinylLibraryDiagnostics = ReturnType<
 
 const clamp = THREE.MathUtils.clamp;
 const shelfTop = 0.26;
+const shelfMinimumWidth = 9.8;
+const shelfEndOverhang = 6.4;
 const browseCamera = new THREE.Vector3(-0.38, 1.48, 9.4);
 const browseTarget = new THREE.Vector3(-0.38, 1.26, 0.1);
-const focusInDuration = 0.5;
-const focusOutDuration = 0.38;
-const sleeveOpenDuration = 0.72;
-const sleeveCloseDuration = 0.62;
-const playingCameraReturnDuration = 0.72;
+const focusInDuration = 0.46;
+const focusOutDuration = 0.34;
+const sleeveOpenDuration = 0.58;
+const sleeveCloseDuration = 0.54;
+const playingCameraReturnDuration = 0.62;
+const cameraResetDuration = 0.42;
 const desktopFocusX = -1.08;
 const desktopFocusZ = 1.5;
 const desktopFocusScale = 0.84;
@@ -195,12 +198,12 @@ const mobileFocusZ = 1.18;
 const mobileFocusScale = 0.76;
 const idleVinylReveal = 0.88;
 const cueDurations: Record<Exclude<CueMotionPhase, "playing">, number> = {
-  "extract-vinyl": 0.58,
-  "transport-to-turntable": 0.88,
-  "lower-tonearm": 0.82,
-  "raise-tonearm": 0.56,
-  "return-to-sleeve": 0.78,
-  "reinsert-vinyl": 0.5,
+  "extract-vinyl": 0.52,
+  "transport-to-turntable": 0.76,
+  "lower-tonearm": 0.68,
+  "raise-tonearm": 0.5,
+  "return-to-sleeve": 0.68,
+  "reinsert-vinyl": 0.44,
 };
 const trackTransitionDurations: Record<
   Exclude<TrackTransitionMotionPhase, "waiting">,
@@ -220,9 +223,11 @@ function easeOutCubic(value: number) {
   return 1 - t * t * t;
 }
 
-function smooth(value: number) {
+function smoother(value: number) {
   const t = clamp(value, 0, 1);
-  return t * t * (3 - 2 * t);
+  if (t <= Number.EPSILON) return 0;
+  if (t >= 1 - Number.EPSILON) return 1;
+  return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 function toTexture(
@@ -323,8 +328,12 @@ export class RecordShelfEngine {
   private pointerLastX = 0;
   private pointerTravel = 0;
   private reducedMotion = false;
+  private reducedMotionQuery: MediaQueryList;
   private focusCameraPosition = new THREE.Vector3();
   private focusCameraTarget = new THREE.Vector3();
+  private cameraResetStartPosition = new THREE.Vector3();
+  private cameraResetStartTarget = new THREE.Vector3();
+  private cameraResetProgress = 1;
   private cueCameraSleevePosition = new THREE.Vector3();
   private cueCameraSleeveTarget = new THREE.Vector3();
   private cueCameraReturnPosition = new THREE.Vector3();
@@ -333,14 +342,29 @@ export class RecordShelfEngine {
   private cueCameraTurntableTarget = new THREE.Vector3();
   private cueCameraPlatterWorld = new THREE.Vector3();
   private cueCameraTurntableScale = new THREE.Vector3();
+  private scratchWorldPosition = new THREE.Vector3();
+  private scratchPlatterWorld = new THREE.Vector3();
+  private scratchSelectedScale = new THREE.Vector3();
+  private scratchTurntableScale = new THREE.Vector3();
+  private scratchProjection = new THREE.Vector3();
+  private vinylAnchor: VinylScreenAnchor = {
+    x: 0,
+    y: 0,
+    visible: false,
+  };
+  private vinylAnchorActive = false;
   private responsiveBrowseCamera = browseCamera.clone();
   private responsiveBrowseTarget = browseTarget.clone();
   private lastTimestamp = 0;
   private lastDiagnosticsAt = 0;
+  private frameTimes = new Float32Array(180);
+  private frameTimeIndex = 0;
+  private frameTimeCount = 0;
   private isDisposed = false;
   private cuePhase: CueMotionPhase | null = null;
   private cueProgress = 0;
   private grooveProgress = 0;
+  private targetGrooveProgress = 0;
   private platterSpeed = 0;
   private platterAngle = 0;
   private cueContactFired = false;
@@ -373,9 +397,14 @@ export class RecordShelfEngine {
     this.canvas = canvas;
     this.recordsData = records;
     this.callbacks = callbacks;
-    this.reducedMotion = window.matchMedia(
+    this.reducedMotionQuery = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
-    ).matches;
+    );
+    this.reducedMotion = this.reducedMotionQuery.matches;
+    this.reducedMotionQuery.addEventListener(
+      "change",
+      this.handleReducedMotionChange,
+    );
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
@@ -517,7 +546,10 @@ export class RecordShelfEngine {
       );
     });
 
-    const shelfWidth = Math.max(6.2, cursor + 3.2);
+    const shelfWidth = Math.max(
+      shelfMinimumWidth,
+      cursor + shelfEndOverhang,
+    );
     const shelfMaterial = new THREE.MeshPhysicalMaterial({
       color: siteConfig.theme.structure,
       roughness: 0.82,
@@ -944,8 +976,21 @@ export class RecordShelfEngine {
     this.clearPointerInteraction();
   };
 
+  private handleReducedMotionChange = (event: MediaQueryListEvent) => {
+    this.reducedMotion = event.matches;
+    if (!event.matches || this.cameraResetProgress >= 1) return;
+    this.cameraResetProgress = 1;
+    this.camera.position.copy(this.focusCameraPosition);
+    this.controls.target.copy(this.focusCameraTarget);
+    this.camera.lookAt(this.controls.target);
+  };
+
   private handleVisibilityChange = () => {
-    if (document.visibilityState === "hidden") this.clearPointerInteraction();
+    if (document.visibilityState === "hidden") {
+      this.clearPointerInteraction();
+      return;
+    }
+    this.lastTimestamp = performance.now();
   };
 
   private clearPointerInteraction(pointerId = this.pointerId) {
@@ -1118,7 +1163,10 @@ export class RecordShelfEngine {
         return false;
       }
     }
-    record.pose = { ...pose };
+    record.pose.x = pose.x;
+    record.pose.z = pose.z;
+    record.pose.yaw = pose.yaw;
+    record.pose.scale = pose.scale;
     record.content.position.x = pose.x;
     record.content.position.z = pose.z;
     record.content.rotation.y = pose.yaw;
@@ -1236,14 +1284,14 @@ export class RecordShelfEngine {
     if (this.isDisposed) return;
     this.animationFrame = requestAnimationFrame(this.animate);
     const timestamp = performance.now();
-    const delta = clamp(
-      (timestamp - this.lastTimestamp) / 1000 || 1 / 60,
-      0,
-      0.05,
-    );
+    const rawDelta =
+      (timestamp - this.lastTimestamp) / 1000 || 1 / 60;
+    const delta = clamp(rawDelta, 0, 0.05);
     this.lastTimestamp = timestamp;
+    this.recordFrameTime(Math.min(rawDelta * 1000, 250));
 
     this.updateState(delta, timestamp);
+    this.updateCameraReset(delta);
     this.updateRecords(delta);
     this.updateCue(delta);
     this.emitVinylPresentation();
@@ -1254,6 +1302,38 @@ export class RecordShelfEngine {
     this.updateVinylAnchor();
     this.updateDiagnostics(timestamp);
   };
+
+  private recordFrameTime(frameTimeMs: number) {
+    this.frameTimes[this.frameTimeIndex] = frameTimeMs;
+    this.frameTimeIndex = (this.frameTimeIndex + 1) % this.frameTimes.length;
+    this.frameTimeCount = Math.min(
+      this.frameTimeCount + 1,
+      this.frameTimes.length,
+    );
+  }
+
+  private frameTimeDiagnostics() {
+    const samples = Array.from(
+      this.frameTimes.subarray(0, this.frameTimeCount),
+    ).sort((left, right) => left - right);
+    const percentile = (value: number) =>
+      samples[
+        Math.min(
+          samples.length - 1,
+          Math.floor(samples.length * value),
+        )
+      ] ?? 0;
+    return {
+      samples: samples.length,
+      meanMs:
+        samples.reduce((total, value) => total + value, 0) /
+        Math.max(1, samples.length),
+      p95Ms: percentile(0.95),
+      maxMs: samples.at(-1) ?? 0,
+      over20ms: samples.filter((value) => value > 20).length,
+      over32ms: samples.filter((value) => value > 32).length,
+    };
+  }
 
   private updateState(delta: number, timestamp: number) {
     if (this.mode === "browse") {
@@ -1285,7 +1365,7 @@ export class RecordShelfEngine {
         1,
       );
       this.updateFocusCamera(delta);
-      if (this.focusProgress >= 1) {
+      if (this.focusProgress >= 0.62) {
         this.sleeveRevealProgress = clamp(
           this.sleeveRevealProgress +
             delta / (this.reducedMotion ? 0.1 : sleeveOpenDuration),
@@ -1395,7 +1475,7 @@ export class RecordShelfEngine {
     this.turntable.visible = this.selectedIndex !== null && motionFocus > 0.46;
 
     if (this.turntable.visible) {
-      const reveal = smooth((motionFocus - 0.46) / 0.54);
+      const reveal = smoother((motionFocus - 0.46) / 0.54);
       this.turntableBase.position.y = (1 - reveal) * -0.24;
       this.turntableBase.scale.setScalar(0.92 + reveal * 0.08);
       this.turntableBase.rotation.y = (1 - reveal) * -0.08;
@@ -1430,7 +1510,7 @@ export class RecordShelfEngine {
       record.inspectionIdle.position.y = 0;
       record.inspectionIdle.rotation.set(0, 0, 0);
       this.updateSleeveFlip(record, delta);
-      const mouthOpen = isSelected ? smooth(this.sleeveRevealProgress) : 0;
+      const mouthOpen = isSelected ? smoother(this.sleeveRevealProgress) : 0;
       record.sleeveMouth.scale.z = 1 + mouthOpen * 0.72;
       record.sleeveMouth.rotation.y = -mouthOpen * 0.014;
       record.sleeveMouth.position.z = mouthOpen * 0.0035;
@@ -1598,15 +1678,15 @@ export class RecordShelfEngine {
   private cueLayout(): CueMotionLayout | null {
     if (this.selectedIndex === null) return null;
     const selected = this.runtimeRecords[this.selectedIndex];
-    const sleeveWorld = new THREE.Vector3();
+    const sleeveWorld = this.scratchWorldPosition;
     selected.inspectionIdle.getWorldPosition(sleeveWorld);
-    const platterWorld = new THREE.Vector3();
+    const platterWorld = this.scratchPlatterWorld;
     this.platter.getWorldPosition(platterWorld);
     const turntableScale = this.turntable.getWorldScale(
-      new THREE.Vector3(),
+      this.scratchTurntableScale,
     ).x;
     const selectedScale = selected.content.getWorldScale(
-      new THREE.Vector3(),
+      this.scratchSelectedScale,
     ).x;
     const pocketZ =
       sleeveWorld.z + sleeveOpeningContract.pocketDepthBias * selectedScale;
@@ -1717,6 +1797,12 @@ export class RecordShelfEngine {
     selected.vinyl.visible = true;
     let pose: CueMotionPose;
     if (this.cuePhase === "playing") {
+      this.grooveProgress = damp(
+        this.grooveProgress,
+        this.targetGrooveProgress,
+        this.playbackMode === "seeking" ? 18 : 5.5,
+        delta,
+      );
       pose = cueMotionPose("playing", this.grooveProgress, layout);
       if (
         this.playbackMode === "paused" ||
@@ -1755,7 +1841,7 @@ export class RecordShelfEngine {
     );
     if (this.cuePhase === "reinsert-vinyl") {
       this.sleeveRevealProgress = this.returnAfterVinyl
-        ? 1 - smooth(this.cueProgress)
+        ? 1 - smoother(this.cueProgress)
         : 1;
     }
     this.applyCuePose(selected, pose, delta);
@@ -1918,6 +2004,7 @@ export class RecordShelfEngine {
       this.commitTrackPresentation(selected, transition.targetTrack);
     }
     this.grooveProgress = transition.toGrooveProgress;
+    this.targetGrooveProgress = transition.toGrooveProgress;
     this.trackTransition = null;
     this.cuePhase = "playing";
     this.cueProgress = 1;
@@ -2004,7 +2091,7 @@ export class RecordShelfEngine {
   private updateFocusCamera(delta: number) {
     if (this.selectedIndex === null) return;
     const selected = this.runtimeRecords[this.selectedIndex];
-    const worldPosition = new THREE.Vector3();
+    const worldPosition = this.scratchWorldPosition;
     selected.content.getWorldPosition(worldPosition);
     this.frameFocusedRecord(worldPosition, easeOutCubic(this.focusProgress));
     this.camera.position.lerp(
@@ -2012,6 +2099,56 @@ export class RecordShelfEngine {
       1 - Math.exp(-(this.reducedMotion ? 28 : 13) * delta),
     );
     this.camera.lookAt(this.focusCameraTarget);
+  }
+
+  private beginCameraReset() {
+    if (this.mode !== "inspect" || this.selectedIndex === null) return;
+    const selected = this.runtimeRecords[this.selectedIndex];
+    this.cameraResetStartPosition.copy(this.camera.position);
+    this.cameraResetStartTarget.copy(this.controls.target);
+    selected.content.getWorldPosition(this.scratchWorldPosition);
+    this.frameFocusedRecord(this.scratchWorldPosition);
+    this.controls.enabled = false;
+    this.cameraResetProgress = 0;
+
+    if (this.reducedMotion) {
+      this.cameraResetProgress = 1;
+      this.camera.position.copy(this.focusCameraPosition);
+      this.controls.target.copy(this.focusCameraTarget);
+      this.camera.lookAt(this.controls.target);
+      this.controls.enabled =
+        this.trackTransition === null && !selected.sleeveFlipping;
+    }
+  }
+
+  private updateCameraReset(delta: number) {
+    if (this.cameraResetProgress >= 1 || this.selectedIndex === null) return;
+    this.cameraResetProgress = clamp(
+      this.cameraResetProgress +
+        delta / (this.reducedMotion ? 0.08 : cameraResetDuration),
+      0,
+      1,
+    );
+    const progress = smoother(this.cameraResetProgress);
+    this.camera.position.lerpVectors(
+      this.cameraResetStartPosition,
+      this.focusCameraPosition,
+      progress,
+    );
+    this.controls.target.lerpVectors(
+      this.cameraResetStartTarget,
+      this.focusCameraTarget,
+      progress,
+    );
+    this.camera.lookAt(this.controls.target);
+    this.applyFocusViewOffset(1);
+
+    if (this.cameraResetProgress < 1) return;
+    const selected = this.runtimeRecords[this.selectedIndex];
+    this.controls.enabled =
+      this.mode === "inspect" &&
+      this.trackTransition === null &&
+      !selected.sleeveFlipping;
   }
 
   private frameTurntableCamera() {
@@ -2044,7 +2181,7 @@ export class RecordShelfEngine {
         0,
         1,
       );
-      const returnProgress = smooth(this.cueProgress);
+      const returnProgress = smoother(this.cueProgress);
       this.camera.position.lerpVectors(
         this.cueCameraReturnPosition,
         this.cueCameraSleevePosition,
@@ -2129,19 +2266,22 @@ export class RecordShelfEngine {
   }
 
   private updateVinylAnchor() {
-    if (
-      this.selectedIndex === null ||
-      this.mode !== "inspect"
-    ) {
-      this.callbacks.onVinylAnchor?.(null);
+    if (this.selectedIndex === null || this.mode !== "inspect") {
+      if (this.vinylAnchorActive) {
+        this.vinylAnchorActive = false;
+        this.callbacks.onVinylAnchor(null);
+      }
       return;
     }
     const selected = this.runtimeRecords[this.selectedIndex];
     if (!selected.vinyl.visible) {
-      this.callbacks.onVinylAnchor?.(null);
+      if (this.vinylAnchorActive) {
+        this.vinylAnchorActive = false;
+        this.callbacks.onVinylAnchor(null);
+      }
       return;
     }
-    const projected = new THREE.Vector3();
+    const projected = this.scratchProjection;
     selected.vinylLabel.getWorldPosition(projected);
     projected.project(this.camera);
     const visible =
@@ -2151,11 +2291,13 @@ export class RecordShelfEngine {
       projected.x < 1.08 &&
       projected.y > -1.08 &&
       projected.y < 1.08;
-    this.callbacks.onVinylAnchor?.({
-      x: (projected.x * 0.5 + 0.5) * this.canvas.clientWidth,
-      y: (-projected.y * 0.5 + 0.5) * this.canvas.clientHeight,
-      visible,
-    });
+    this.vinylAnchor.x =
+      (projected.x * 0.5 + 0.5) * this.canvas.clientWidth;
+    this.vinylAnchor.y =
+      (-projected.y * 0.5 + 0.5) * this.canvas.clientHeight;
+    this.vinylAnchor.visible = visible;
+    this.vinylAnchorActive = true;
+    this.callbacks.onVinylAnchor(this.vinylAnchor);
   }
 
   private applyFocusViewOffset(progress: number) {
@@ -2209,19 +2351,11 @@ export class RecordShelfEngine {
       this.camera.position.copy(this.responsiveBrowseCamera);
       this.camera.lookAt(this.responsiveBrowseTarget);
     } else if (this.mode === "inspect" && this.selectedIndex !== null) {
-      const worldPosition = new THREE.Vector3();
-      this.runtimeRecords[this.selectedIndex].content.getWorldPosition(
-        worldPosition,
-      );
-      this.frameFocusedRecord(worldPosition);
-      this.camera.position.copy(this.focusCameraPosition);
-      this.controls.target.copy(this.focusCameraTarget);
-      this.camera.lookAt(this.controls.target);
       if (this.cuePhase === "playing") {
         this.cueProgress = 1;
-        const selected = this.runtimeRecords[this.selectedIndex];
-        this.controls.enabled =
-          this.trackTransition === null && !selected.sleeveFlipping;
+        this.beginCameraReset();
+      } else if (this.cuePhase === null) {
+        this.beginCameraReset();
       }
     }
   };
@@ -2313,6 +2447,9 @@ export class RecordShelfEngine {
     this.canvas.dataset.geometries = String(diagnostics.geometries);
     this.canvas.dataset.textures = String(diagnostics.textures);
     this.canvas.dataset.pixelRatio = String(diagnostics.pixelRatio);
+    this.canvas.dataset.frameP95 = diagnostics.frameTime.p95Ms.toFixed(2);
+    this.canvas.dataset.frameMax = diagnostics.frameTime.maxMs.toFixed(2);
+    this.canvas.dataset.frameOver20 = String(diagnostics.frameTime.over20ms);
     this.canvas.dataset.motionPhase = diagnostics.motionPhase;
     this.canvas.dataset.cuePhase = diagnostics.cuePhase ?? "idle";
     this.canvas.dataset.trackTransition =
@@ -2418,6 +2555,7 @@ export class RecordShelfEngine {
 
   private beginCue(trackProgress = 0) {
     if (this.mode !== "inspect" || this.selectedIndex === null) return false;
+    this.cameraResetProgress = 1;
     this.controls.enabled = false;
     this.cueCameraSleevePosition.copy(this.camera.position);
     this.cueCameraSleeveTarget.copy(this.controls.target);
@@ -2434,6 +2572,7 @@ export class RecordShelfEngine {
     this.grooveProgress = activeTrack
       ? trackGrooveProgress(activeTrack, runtime.data.tracks, trackProgress)
       : clamp(trackProgress, 0, 1);
+    this.targetGrooveProgress = this.grooveProgress;
     this.cueContactFired = false;
     this.vinylReturnFired = false;
     this.playbackMode = "cueing";
@@ -2615,14 +2754,15 @@ export class RecordShelfEngine {
 
   setPlaybackProgress(progress: number) {
     if (this.selectedIndex === null) {
-      this.grooveProgress = clamp(progress, 0, 1);
+      this.targetGrooveProgress = clamp(progress, 0, 1);
+      this.grooveProgress = this.targetGrooveProgress;
       return;
     }
     const runtime = this.runtimeRecords[this.selectedIndex];
     const activeTrack = runtime.data.tracks.find(
       (track) => track.id === runtime.activeTrackId,
     );
-    this.grooveProgress = activeTrack
+    this.targetGrooveProgress = activeTrack
       ? trackGrooveProgress(activeTrack, runtime.data.tracks, progress)
       : clamp(progress, 0, 1);
   }
@@ -2669,6 +2809,7 @@ export class RecordShelfEngine {
         return;
       }
     }
+    this.cameraResetProgress = 1;
     this.controls.enabled = false;
     this.mode = "returning";
     this.callbacks.onMode(this.mode, this.selectedIndex);
@@ -2681,18 +2822,10 @@ export class RecordShelfEngine {
 
   resetFocusView() {
     if (this.mode !== "inspect" || this.selectedIndex === null) return;
-    const selected = this.runtimeRecords[this.selectedIndex];
-    const worldPosition = new THREE.Vector3();
-    selected.content.getWorldPosition(worldPosition);
-    this.frameFocusedRecord(worldPosition);
-    this.controls.target.copy(this.focusCameraTarget);
-    this.camera.position.copy(this.focusCameraPosition);
     if (this.cuePhase === "playing") {
       this.cueProgress = 1;
-      this.controls.enabled =
-        this.trackTransition === null && !selected.sleeveFlipping;
     }
-    this.controls.update();
+    this.beginCameraReset();
   }
 
   getDiagnostics() {
@@ -2722,6 +2855,7 @@ export class RecordShelfEngine {
       geometries: info.memory.geometries,
       textures: info.memory.textures,
       pixelRatio: this.renderer.getPixelRatio(),
+      frameTime: this.frameTimeDiagnostics(),
       motionPhase: this.browseMotionPhase,
       cuePhase: this.cuePhase,
       vinylPresentation: vinylPresentationForCue(
@@ -2773,6 +2907,10 @@ export class RecordShelfEngine {
     document.removeEventListener(
       "visibilitychange",
       this.handleVisibilityChange,
+    );
+    this.reducedMotionQuery.removeEventListener(
+      "change",
+      this.handleReducedMotionChange,
     );
 
     this.scene.traverse((object) => {

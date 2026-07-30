@@ -656,21 +656,21 @@ canvas:focus-visible {
   z-index: 1;
   right: 50%;
   bottom: 1px;
-  width: 1px;
-  height: 7px;
+  width: 2px;
+  height: 18px;
   background: var(--ink);
   opacity: 0.46;
+  transform: scale3d(0.5, 0.39, 1);
+  transform-origin: 50% 100%;
   transition:
-    height 180ms ease,
-    opacity 180ms ease,
-    width 180ms ease;
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .archive-index__ticks button:hover span,
 .archive-index__ticks button.is-active span {
-  width: 2px;
-  height: 18px;
   opacity: 1;
+  transform: scale3d(1, 1, 1);
 }
 
 .input-hint {
@@ -895,13 +895,19 @@ canvas:focus-visible {
   cursor: pointer;
   text-align: left;
   transition:
-    background-color 160ms ease,
-    color 160ms ease;
+    background-color var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-out);
 }
 
 .track-button:hover,
 .track-button.is-selected {
   background: color-mix(in srgb, var(--ink) 7%, transparent);
+}
+
+.track-button:hover:not(:disabled) {
+  transform: translate3d(2px, 0, 0);
 }
 
 .track-button.is-selected {
@@ -1060,8 +1066,9 @@ canvas:focus-visible {
   transform: translate3d(0, 18px, 0);
   backdrop-filter: blur(18px);
   transition:
-    opacity 280ms ease,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-medium) var(--ease-standard),
+    transform var(--motion-slow) var(--ease-emphasized);
+  will-change: transform, opacity;
 }
 
 .is-focused .player {
@@ -1086,8 +1093,13 @@ canvas:focus-visible {
   color: var(--paper-light);
   cursor: pointer;
   transition:
-    transform 160ms ease,
-    opacity 160ms ease;
+    transform var(--motion-fast) var(--ease-out),
+    opacity var(--motion-fast) var(--ease-standard);
+}
+
+.transport-icon {
+  display: inline-block;
+  animation: control-pop var(--motion-fast) var(--ease-out) both;
 }
 
 .transport-button:hover:not(:disabled) {
@@ -1116,6 +1128,7 @@ canvas:focus-visible {
   gap: 9px;
   align-items: baseline;
   min-width: 0;
+  animation: content-settle var(--motion-medium) var(--ease-out) both;
 }
 
 .player__track strong {
@@ -1178,7 +1191,11 @@ input[type="range"] {
   font-weight: 590;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  transition: opacity 260ms ease;
+  transition: opacity var(--motion-medium) var(--ease-standard);
+}
+
+.experience-status__message {
+  animation: status-settle var(--motion-fast) var(--ease-out) both;
 }
 
 .experience-status__dot {
@@ -1211,8 +1228,8 @@ input[type="range"] {
   justify-items: center;
   background: var(--paper);
   transition:
-    opacity 650ms ease 100ms,
-    visibility 650ms ease 100ms;
+    opacity 540ms var(--ease-standard) 80ms,
+    visibility 540ms var(--ease-standard) 80ms;
 }
 
 .is-ready .loading-screen {
@@ -1265,6 +1282,42 @@ input[type="range"] {
   }
 }
 
+@keyframes content-settle {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 7px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes status-settle {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 3px, 0);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes control-pop {
+  from {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
 .independent-note {
   position: absolute;
   z-index: 17;
@@ -1300,6 +1353,51 @@ input[type="range"] {
   display: grid;
   padding: 24px;
   place-items: center;
+}
+
+.motion-overlay {
+  --motion-dialog-y: 14px;
+
+  pointer-events: none;
+}
+
+.motion-overlay.is-open {
+  pointer-events: auto;
+}
+
+.motion-backdrop {
+  opacity: 0;
+  transition: opacity 220ms var(--ease-standard);
+}
+
+.motion-dialog {
+  opacity: 0;
+  transform: translate3d(0, var(--motion-dialog-y), 0) scale(0.985);
+  transform-origin: 50% 42%;
+  transition:
+    opacity 180ms var(--ease-standard),
+    transform 300ms var(--ease-emphasized);
+  will-change: transform, opacity;
+}
+
+.motion-overlay.is-open .motion-backdrop,
+.motion-overlay.is-open .motion-dialog {
+  opacity: 1;
+}
+
+.motion-overlay.is-open .motion-dialog {
+  transform: translate3d(0, 0, 0) scale(1);
+}
+
+@starting-style {
+  .motion-overlay.is-open .motion-backdrop {
+    opacity: 0;
+  }
+
+  .motion-overlay.is-open .motion-dialog {
+    opacity: 0;
+    transform: translate3d(0, var(--motion-dialog-y), 0) scale(0.985);
+  }
 }
 
 .turntable-settings__backdrop {
@@ -1917,10 +2015,13 @@ input[type="range"] {
 
 .local-audio-manager__progress i {
   display: block;
+  width: 100%;
   height: 100%;
   border-radius: inherit;
   background: var(--accent);
-  transition: width 220ms ease;
+  transform: scaleX(var(--progress-scale, 0));
+  transform-origin: left;
+  transition: transform 220ms var(--ease-out);
 }
 
 .local-audio-manager__progress p {
@@ -1980,6 +2081,7 @@ input[type="range"] {
 
   .is-focused .archive-header {
     right: 0;
+    transform: none;
   }
 
   .wordmark {
@@ -2383,7 +2485,7 @@ input[type="range"] {
 .vinyl-play-button:hover:not(:disabled) {
   background: var(--accent);
   box-shadow: 0 12px 32px color-mix(in srgb, var(--ink) 24%, transparent);
-  transform: translate3d(-50%, -50%, 0) scale(1.025);
+  scale: 1.025;
 }
 
 .vinyl-play-button__grooves {
@@ -2774,10 +2876,8 @@ input[type="range"] {
   box-shadow: 0 8px 28px color-mix(in srgb, var(--ink) 8%, transparent);
   backdrop-filter: none;
   transition:
-    opacity 280ms ease,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    left 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    width 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-medium) var(--ease-standard),
+    transform var(--motion-slow) var(--ease-emphasized);
 }
 
 .transport-button {
@@ -2983,8 +3083,8 @@ input[type="range"] {
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease,
-    opacity 140ms ease,
-    transform 140ms ease;
+    opacity 140ms ease;
+  will-change: transform;
 }
 
 .rearrange-library__list li.is-dragging {
@@ -3279,6 +3379,8 @@ input[type="range"] {
   }
 
   .rearrange-library {
+    --motion-dialog-y: 28px;
+
     padding: 0;
     place-items: end stretch;
   }

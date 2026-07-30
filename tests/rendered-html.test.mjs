@@ -228,7 +228,7 @@ test("default development waits for the local music service", async () => {
   );
 });
 
-test("keeps focused header controls clear of the open album panel", async () => {
+test("shifts focused header controls away from the open album panel", async () => {
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
   assert.ok(
@@ -236,8 +236,10 @@ test("keeps focused header controls clear of the open album panel", async () => 
     "the desktop album panel exposes its width as a shared layout boundary",
   );
   assert.ok(
-    styles.includes("right: var(--album-panel-width);"),
-    "the focused header ends before the album panel begins",
+    styles.includes(
+      "transform: translate3d(calc(var(--album-panel-width) * -0.08), 0, 0);",
+    ),
+    "the focused header shifts away from the album panel",
   );
   assert.match(
     styles,
@@ -246,7 +248,7 @@ test("keeps focused header controls clear of the open album panel", async () => 
   );
   assert.match(
     styles,
-    /@media \(max-width: 760px\)[\s\S]*?\.is-focused \.archive-header \{\s*right: 0;/,
+    /@media \(max-width: 760px\)[\s\S]*?\.is-focused \.archive-header \{\s*right: 0;\s*transform: none;/,
     "the header keeps the full viewport width above the bottom-sheet panel",
   );
 });
@@ -1192,6 +1194,24 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
     layout.sleeveClearVinyl.x - 0.5 >= layout.sleeveMouthVinyl.x + 0.05,
     "the full pressing clears the sleeve mouth before moving forward",
   );
+  const mouthEpsilon = 1e-5;
+  const beforeMouth = cueMotionPose(
+    "extract-vinyl",
+    0.42 - mouthEpsilon,
+    layout,
+  ).vinyl.x;
+  const atMouth = cueMotionPose("extract-vinyl", 0.42, layout).vinyl.x;
+  const afterMouth = cueMotionPose(
+    "extract-vinyl",
+    0.42 + mouthEpsilon,
+    layout,
+  ).vinyl.x;
+  const incomingVelocity = (atMouth - beforeMouth) / mouthEpsilon;
+  const outgoingVelocity = (afterMouth - atMouth) / mouthEpsilon;
+  assert.ok(
+    Math.abs(incomingVelocity - outgoingVelocity) < 1e-3,
+    "the pressing keeps a continuous velocity as it crosses the sleeve mouth",
+  );
   assert.deepEqual(
     cueMotionPose("transport-to-turntable", 0, layout).vinyl,
     layout.extractedVinyl,
@@ -1933,6 +1953,10 @@ test("engine owns the only animation loop and audio stays frame-loop free", asyn
   assert.match(engine, /this\.updateCue\(delta\)/);
   assert.match(engine, /this\.updateAudioVisuals\(delta\)/);
   assert.match(engine, /this\.renderer\.render\(this\.scene, this\.camera\)/);
+  assert.match(engine, /frameTime:\s*this\.frameTimeDiagnostics\(\)/);
+  assert.match(engine, /this\.canvas\.dataset\.frameP95/);
+  assert.match(engine, /this\.reducedMotionQuery\.addEventListener/);
+  assert.match(engine, /this\.reducedMotionQuery\.removeEventListener/);
   assert.equal(
     countMatches(`${audioController}\n${audioVisualizer}`, /\brequestAnimationFrame\s*\(/g),
     0,
@@ -1944,6 +1968,32 @@ test("engine owns the only animation loop and audio stays frame-loop free", asyn
   assert.doesNotMatch(
     library,
     /setState\s*\([^)]*(?:frequency|analyser|waveform)/i,
+  );
+});
+
+test("motion surfaces stay compositor-friendly and the shelf extends beyond the collection", async () => {
+  const [engine, styles] = await Promise.all([
+    readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(engine, /const shelfEndOverhang = 6\.4;/);
+  assert.match(engine, /cursor \+ shelfEndOverhang/);
+  assert.match(
+    styles,
+    /\.vinyl-play-button\s*\{[\s\S]*?top:\s*0;[\s\S]*?left:\s*0;[\s\S]*?translate3d\(var\(--vinyl-play-x\), var\(--vinyl-play-y\), 0\)/,
+  );
+  const playerBlocks = styles.match(/\.player\s*\{[^}]*\}/g) ?? [];
+  assert.ok(
+    playerBlocks.every(
+      (block) => !/transition:[^}]*\b(?:left|width)\b/.test(block),
+    ),
+    "player transitions avoid layout-triggering left and width properties",
+  );
+  assert.match(styles, /\.motion-dialog\s*\{[\s\S]*?will-change:\s*transform, opacity;/);
+  assert.match(
+    styles,
+    /@media \(prefers-reduced-motion: reduce\)[\s\S]*?transition-duration:\s*1ms !important;/,
   );
 });
 
@@ -2054,6 +2104,7 @@ test("imports music through one entry point and fills verified audio only after 
   assert.match(importDialog, /track\.youtubeMatch\?\.verified === true/);
   assert.match(importDialog, /if \(automaticAudioReady\)/);
   assert.match(importDialog, /Artwork, tracklists, and selected files will still import normally/);
+  assert.doesNotMatch(importDialog, /Helper:|files stay on this computer/);
   assert.match(importDialog, /onOpenAudioManager/);
   assert.match(importDialog, /await onImportComplete\(imported\.records\)/);
   assert.ok(

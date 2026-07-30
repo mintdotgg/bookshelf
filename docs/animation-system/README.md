@@ -172,18 +172,23 @@ The visible handoff is discrete:
 
 ```mermaid
 flowchart LR
-    A["Retreat current<br/>180 ms"] -->
-    B["Turn current<br/>220 ms"] -->
-    C["Shelve current<br/>200 ms"] -->
-    D["Extract next<br/>200 ms"] -->
-    E["Turn next<br/>220 ms"] -->
-    F["Settle next<br/>240 ms"]
+    A["Retreat current<br/>150 ms"] -->
+    B["Turn current<br/>180 ms"] -->
+    C["Shelve current<br/>170 ms"] -->
+    D["Extract next<br/>170 ms"] -->
+    E["Turn next<br/>180 ms"] -->
+    F["Settle next<br/>200 ms"]
 ```
 
 `browseRecordMotionPose()` samples every phase from normalized progress. The
 rotation lane is derived from the largest sleeve’s rotated radius and the
 catalog collision margin. A sleeve reaches that clear lane before its yaw
 changes.
+
+The shelf slab and rear rail derive their width from the complete collection
+plus a 6.4-unit end allowance. That keeps both rounded ends outside the normal
+desktop composition while leaving the record slots and collision lanes
+unchanged.
 
 Raycasting uses one invisible box per record. A pointer gesture must remain
 under seven pixels to count as a click, which prevents an archive swipe from
@@ -192,23 +197,25 @@ completed its browse handoff.
 
 ## Focus and return
 
-Focus takes 500 ms, then the sleeve reveal takes 720 ms under ordinary motion.
-Focus first clears neighboring sleeves, moves into the inspection composition,
-and scales. Once the camera settles, `sleeveRevealProgress` flexes the mouth and
-slides the pressing from fully enclosed to the staged label-visible pose. Its
-final jacket yaw is exactly zero and the camera optical axis stays parallel to
-the jacket normal, so the sleeve is face-on even though the composition places
-it left of center. The camera uses exponential, frame-rate-independent
-smoothing and a view offset on desktop to reserve distinct sleeve, vinyl,
-turntable, player, and album-panel zones.
+Focus takes 460 ms. The 580 ms sleeve reveal begins once focus reaches 62%, so
+the physical and camera motions overlap without hiding either action. Focus
+first clears neighboring sleeves, moves into the inspection composition, and
+scales. `sleeveRevealProgress` then flexes the mouth and slides the pressing
+from fully enclosed to the staged label-visible pose. Its final jacket yaw is
+exactly zero and the camera optical axis stays parallel to the jacket normal,
+so the sleeve is face-on even though the composition places it left of center.
+The camera uses exponential, frame-rate-independent smoothing and a view offset
+on desktop to reserve distinct sleeve, vinyl, turntable, player, and
+album-panel zones. Resetting an inspected camera interpolates back to the
+scripted composition over 420 ms instead of snapping.
 
 Mobile uses a centered, smaller sleeve pose and wider camera. The compact
 details/player layout takes priority and the turntable stage is scaled at the
 engine’s 760 px mobile breakpoint.
 
-An idle return first reverses the 620 ms sleeve reveal until the pressing is
+An idle return first reverses the 540 ms sleeve reveal until the pressing is
 fully enclosed, then follows the current live `focusProgress` toward zero over
-380 ms. A return from cue/play completes the tonearm, platter, transport, and
+340 ms. A return from cue/play completes the tonearm, platter, transport, and
 reinsertion path before camera return begins. Neither route resets the record
 or camera to a guessed start pose.
 
@@ -219,13 +226,13 @@ grooveProgress, reinsertTarget)`.
 
 ```mermaid
 flowchart LR
-    A["Extract vinyl<br/>580 ms"] -->
-    B["Move above platter and settle<br/>880 ms"] -->
-    C["Spin up, position arm, lower stylus<br/>820 ms"] -->
+    A["Extract vinyl<br/>520 ms"] -->
+    B["Move above platter and settle<br/>760 ms"] -->
+    C["Spin up, position arm, lower stylus<br/>680 ms"] -->
     D["Playing<br/>track time drives groove"] -->
-    E["Raise arm and spin down<br/>560 ms"] -->
-    F["Return to sleeve opening<br/>780 ms"] -->
-    G["Reinsert vinyl<br/>500 ms"]
+    E["Raise arm and spin down<br/>500 ms"] -->
+    F["Return to sleeve opening<br/>680 ms"] -->
+    G["Reinsert vinyl<br/>440 ms"]
 ```
 
 The transport phase approaches from above before settling on the platter. The
@@ -236,8 +243,10 @@ contact.
 Opening inspection animates the vinyl through three physical extraction
 waypoints: the pressing first slides at the pocket depth to the open edge, then
 continues until its trailing edge clears the mouth, and only then moves forward
-and tilts into the staged position. `sleeveOpeningContract` owns the right-edge
-direction, pocket depth, and clearance used for every jacket size.
+and tilts into the staged position. The first two segments use a shared Hermite
+velocity at the sleeve mouth, preventing a visible pause at that waypoint.
+`sleeveOpeningContract` owns the right-edge direction, pocket depth, and
+clearance used for every jacket size.
 
 `RecordShelfEngine` projects the live label position after the single render
 and updates one semantic HTML play button imperatively, avoiding frame-level
@@ -363,6 +372,8 @@ motion tests before changing phase constants or the collision margin.
   established.
 - Geometries, materials, textures, controls, listeners, observers, audio
   nodes, and renderer resources are disposed at unmount.
+- Per-frame vectors, poses, analyser buffers, and the projected vinyl anchor
+  are reused rather than recreated in the hot path.
 
 ## Diagnostics
 
@@ -378,20 +389,24 @@ The returned snapshot contains:
 - active and selected indices plus record count;
 - cue progress and sleeve reveal progress;
 - draw calls, triangles, geometries, textures, and pixel ratio;
+- rolling frame-time sample count, mean, p95, maximum, and counts above 20 and
+  32 ms;
 - collision rejects, last rejected pair, and current collision;
 - low, mid, high, and aggregate audio levels;
 - drawing-buffer and CSS canvas dimensions.
 
 The same high-level values are mirrored into canvas `data-*` attributes every
-500 ms. The command surface also exposes `browse(index)`, `focus(index)`,
-`play(trackId?)`, `pause()`, `stop()`, `resetView()`, and `returnToShelf()`.
-It does not expose mutable Three.js or Web Audio internals.
+500 ms, including `data-frame-p95`, `data-frame-max`, and
+`data-frame-over20`. The command surface also exposes `browse(index)`,
+`focus(index)`, `play(trackId?)`, `pause()`, `stop()`, `resetView()`, and
+`returnToShelf()`. It does not expose mutable Three.js or Web Audio internals.
 
 Diagnostics aid automated QA but do not replace browser profiling.
 
 ## Reduced motion
 
-The engine reads `prefers-reduced-motion` at startup. When enabled:
+The engine subscribes to `prefers-reduced-motion` and applies changes without a
+reload. When enabled:
 
 - each browse phase uses 45% of its normal duration with a 55 ms floor;
 - focus, sleeve open, sleeve close, and return use 80–100 ms;
@@ -399,9 +414,10 @@ The engine reads `prefers-reduced-motion` at startup. When enabled:
 - shelf and camera response becomes stronger;
 - inspection idle lift and rotation are disabled.
 
-CSS independently collapses interface transitions. State changes, needle
-ordering, error handling, and accessible announcements remain intact even when
-the choreography is shortened.
+CSS independently collapses interface transitions. Dialogs remain mounted for
+their short exit transition, while closed layers become inert immediately.
+State changes, needle ordering, error handling, and accessible announcements
+remain intact even when the choreography is shortened.
 
 ## Safe change checklist
 

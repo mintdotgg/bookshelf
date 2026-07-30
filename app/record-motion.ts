@@ -66,21 +66,16 @@ const maximumFocusScale = 1.08;
 const collisionMargin = 0.045;
 
 export const browsePhaseDuration: Record<BrowseMotionPhase, number> = {
-  "retreat-current": 0.18,
-  "turn-current": 0.22,
-  "shelve-current": 0.2,
-  "extract-next": 0.2,
-  "turn-next": 0.22,
-  "settle-next": 0.24,
+  "retreat-current": 0.15,
+  "turn-current": 0.18,
+  "shelve-current": 0.17,
+  "extract-next": 0.17,
+  "turn-next": 0.18,
+  "settle-next": 0.2,
 };
 
 function clamp01(value: number) {
   return Math.min(1, Math.max(0, value));
-}
-
-function smooth(value: number) {
-  const t = clamp01(value);
-  return t * t * (3 - 2 * t);
 }
 
 export function reinsertProgressForExtraction(
@@ -96,10 +91,14 @@ export function reinsertProgressForExtraction(
 
 function smoother(value: number) {
   const t = clamp01(value);
+  if (t <= Number.EPSILON) return 0;
+  if (t >= 1 - Number.EPSILON) return 1;
   return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 function lerp(start: number, end: number, amount: number) {
+  if (amount === 0) return start;
+  if (Math.abs(1 - amount) <= 1e-12) return end;
   return start + (end - start) * amount;
 }
 
@@ -284,8 +283,8 @@ export function focusedRecordPose(
   focusScale: number,
 ): RecordPose {
   const value = clamp01(progress);
-  const clearanceProgress = smooth(Math.min(1, value / 0.55));
-  const presentationProgress = smooth(
+  const clearanceProgress = smoother(Math.min(1, value / 0.55));
+  const presentationProgress = smoother(
     Math.max(0, (value - 0.55) / 0.45),
   );
 
@@ -417,7 +416,7 @@ export function cueCameraTurntableMix(
   phase: CueMotionPhase,
   progress: number,
 ) {
-  const value = smooth(clamp01(progress));
+  const value = smoother(clamp01(progress));
   const handoffMix = 0.16;
   switch (phase) {
     case "extract-vinyl":
@@ -461,7 +460,7 @@ function interpolateVinylPose(
   to: VinylPose,
   progress: number,
 ): VinylPose {
-  const t = smooth(progress);
+  const t = smoother(progress);
   return {
     x: lerp(from.x, to.x, t),
     y: lerp(from.y, to.y, t),
@@ -473,6 +472,24 @@ function interpolateVinylPose(
   };
 }
 
+function cubicHermite(
+  start: number,
+  end: number,
+  startTangent: number,
+  endTangent: number,
+  progress: number,
+) {
+  const t = clamp01(progress);
+  const t2 = t * t;
+  const t3 = t2 * t;
+  return (
+    (2 * t3 - 3 * t2 + 1) * start +
+    (t3 - 2 * t2 + t) * startTangent +
+    (-2 * t3 + 3 * t2) * end +
+    (t3 - t2) * endTangent
+  );
+}
+
 function vinylExtractionPose(
   progress: number,
   layout: CueMotionLayout,
@@ -482,19 +499,40 @@ function vinylExtractionPose(
   const clearEnd = 0.82;
 
   if (value <= mouthEnd) {
-    return interpolateVinylPose(
-      layout.sleevedVinyl,
-      layout.sleeveMouthVinyl,
-      value / mouthEnd,
-    );
+    const firstVelocity =
+      (layout.sleeveMouthVinyl.x - layout.sleevedVinyl.x) / mouthEnd;
+    const secondVelocity =
+      (layout.sleeveClearVinyl.x - layout.sleeveMouthVinyl.x) /
+      (clearEnd - mouthEnd);
+    return {
+      ...layout.sleevedVinyl,
+      x: cubicHermite(
+        layout.sleevedVinyl.x,
+        layout.sleeveMouthVinyl.x,
+        0,
+        ((firstVelocity + secondVelocity) * 0.5) * mouthEnd,
+        value / mouthEnd,
+      ),
+    };
   }
 
   if (value <= clearEnd) {
-    return interpolateVinylPose(
-      layout.sleeveMouthVinyl,
-      layout.sleeveClearVinyl,
-      (value - mouthEnd) / (clearEnd - mouthEnd),
-    );
+    const firstVelocity =
+      (layout.sleeveMouthVinyl.x - layout.sleevedVinyl.x) / mouthEnd;
+    const secondVelocity =
+      (layout.sleeveClearVinyl.x - layout.sleeveMouthVinyl.x) /
+      (clearEnd - mouthEnd);
+    return {
+      ...layout.sleeveMouthVinyl,
+      x: cubicHermite(
+        layout.sleeveMouthVinyl.x,
+        layout.sleeveClearVinyl.x,
+        ((firstVelocity + secondVelocity) * 0.5) *
+          (clearEnd - mouthEnd),
+        0,
+        (value - mouthEnd) / (clearEnd - mouthEnd),
+      ),
+    };
   }
 
   return interpolateVinylPose(
@@ -548,7 +586,7 @@ function tonearmLoweringPose(
       yaw: lerp(
         layout.tonearmRestYaw,
         targetYaw,
-        smooth(value / positioningEnd),
+        smoother(value / positioningEnd),
       ),
       lift: layout.tonearmRaisedLift,
     };
@@ -559,7 +597,7 @@ function tonearmLoweringPose(
     lift: lerp(
       layout.tonearmRaisedLift,
       layout.tonearmContactLift,
-      smooth((value - positioningEnd) / (1 - positioningEnd)),
+      smoother((value - positioningEnd) / (1 - positioningEnd)),
     ),
   };
 }
@@ -573,7 +611,9 @@ function restingTonearm(layout: CueMotionLayout): TonearmPose {
 
 function cueContact(progress: number) {
   const positioningEnd = 0.62;
-  return smooth((clamp01(progress) - positioningEnd) / (1 - positioningEnd));
+  return smoother(
+    (clamp01(progress) - positioningEnd) / (1 - positioningEnd),
+  );
 }
 
 export function trackTransitionMotionPose(
@@ -593,8 +633,8 @@ export function trackTransitionMotionPose(
 
   if (phase === "lift-tonearm") {
     const liftEnd = 0.46;
-    const lifting = smooth(value / liftEnd);
-    const moving = smooth((value - liftEnd) / (1 - liftEnd));
+    const lifting = smoother(value / liftEnd);
+    const moving = smoother((value - liftEnd) / (1 - liftEnd));
     return {
       vinyl,
       tonearm: {
@@ -605,7 +645,7 @@ export function trackTransitionMotionPose(
           lifting,
         ),
       },
-      platterSpeed: kind === "same-side" ? 1 : 1 - smooth(value),
+      platterSpeed: kind === "same-side" ? 1 : 1 - smoother(value),
       stylusContact: 1 - lifting,
     };
   }
@@ -614,10 +654,12 @@ export function trackTransitionMotionPose(
     const liftArc = Math.sin(value * Math.PI);
     if (kind === "flip-side") {
       vinyl.y += liftArc * 0.54;
-      vinyl.roll += Math.PI * smooth(value);
+      vinyl.roll += Math.PI * smoother(value);
     } else if (kind === "swap-disc") {
       const halfProgress =
-        value < 0.5 ? smooth(value * 2) : smooth((value - 0.5) * 2);
+        value < 0.5
+          ? smoother(value * 2)
+          : smoother((value - 0.5) * 2);
       vinyl.x +=
         value < 0.5
           ? halfProgress * 0.72
@@ -651,7 +693,7 @@ export function trackTransitionMotionPose(
     };
   }
 
-  const lowering = smooth(value);
+  const lowering = smoother(value);
   return {
     vinyl,
     tonearm: {
@@ -705,7 +747,7 @@ export function cueMotionPose(
       return {
         vinyl: { ...layout.platterVinyl },
         tonearm: tonearmLoweringPose(value, groove, layout),
-        platterSpeed: smooth(value / 0.45),
+        platterSpeed: smoother(value / 0.45),
         stylusContact: cueContact(value),
       };
     case "playing":
@@ -722,7 +764,7 @@ export function cueMotionPose(
       return {
         vinyl: { ...layout.platterVinyl },
         tonearm: tonearmLoweringPose(1 - value, groove, layout),
-        platterSpeed: 1 - smooth((value - 0.45) / 0.55),
+        platterSpeed: 1 - smoother((value - 0.45) / 0.55),
         stylusContact: cueContact(1 - value),
       };
     case "return-to-sleeve":

@@ -69,11 +69,7 @@ function ArrowIcon({ direction }: { direction: "left" | "right" }) {
 
 function PlayIcon({ paused }: { paused: boolean }) {
   return (
-    <span
-      key={paused ? "play" : "pause"}
-      className="transport-icon"
-      aria-hidden="true"
-    >
+    <span className="transport-icon" aria-hidden="true">
       {paused ? "▶" : "Ⅱ"}
     </span>
   );
@@ -1529,7 +1525,7 @@ export function VinylLibrary() {
             disabled={!selectedTrack?.previewUrl || isBusy}
             onClick={() => (isPlaying ? pausePlayback() : playTrack())}
           >
-            <PlayIcon paused={!isPlaying} />
+            <PlayIcon key={isPlaying ? "pause" : "play"} paused={!isPlaying} />
           </button>
           <button
             type="button"
