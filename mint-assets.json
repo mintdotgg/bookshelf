@@ -1,0 +1,190 @@
+{
+  "registryVersion": 1,
+  "assetRoot": "public/assets/mint",
+  "assets": {
+    "turntable-chassis-collection": {
+      "source": {
+        "manifestVersion": 1,
+        "kind": "asset",
+        "assetType": "asset_pack",
+        "assetId": "th75kjyzhj044r4m8xyze308dh8bfa87"
+      },
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "mode": "local_files",
+      "artifacts": {
+        "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:0:ks72w1nqrx9pj1g05r5h73zmdd8bf8d6": {
+          "artifactId": "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:0:ks72w1nqrx9pj1g05r5h73zmdd8bf8d6",
+          "role": "canonical_model",
+          "format": "glb",
+          "contentType": "model/gltf-binary",
+          "filename": "walnut-console-dd8bf8d6.glb",
+          "localPath": "public/assets/mint/turntable-chassis-collection/asset_pack_item_glb-vd75nctc66ayy4vqeqfqd5j39n8bfe21-0-ks72w1nqrx9pj1g05r5h73zmdd8bf8d6.glb",
+          "loaderHint": "gltf",
+          "byteSize": 672384,
+          "extensionsUsed": [],
+          "extensionsRequired": [],
+          "usesDraco": false,
+          "requiresDraco": false,
+          "usesMeshopt": false,
+          "requiresMeshopt": false,
+          "usesKtx2": false,
+          "requiresKtx2": false,
+          "unknownRequiredExtensions": []
+        },
+        "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:1:ks74m2ptp855hy0n2jjn5zvg858bfz87": {
+          "artifactId": "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:1:ks74m2ptp855hy0n2jjn5zvg858bfz87",
+          "role": "canonical_model",
+          "format": "glb",
+          "contentType": "model/gltf-binary",
+          "filename": "studio-aluminium-858bfz87.glb",
+          "localPath": "public/assets/mint/turntable-chassis-collection/asset_pack_item_glb-vd75nctc66ayy4vqeqfqd5j39n8bfe21-1-ks74m2ptp855hy0n2jjn5zvg858bfz87.glb",
+          "loaderHint": "gltf",
+          "byteSize": 666160,
+          "extensionsUsed": [],
+          "extensionsRequired": [],
+          "usesDraco": false,
+          "requiresDraco": false,
+          "usesMeshopt": false,
+          "requiresMeshopt": false,
+          "usesKtx2": false,
+          "requiresKtx2": false,
+          "unknownRequiredExtensions": []
+        },
+        "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:2:ks73cktb5saa43xygfhpkhbdn98beqwa": {
+          "artifactId": "asset_pack_item_glb:vd75nctc66ayy4vqeqfqd5j39n8bfe21:2:ks73cktb5saa43xygfhpkhbdn98beqwa",
+          "role": "canonical_model",
+          "format": "glb",
+          "contentType": "model/gltf-binary",
+          "filename": "clear-acrylic-n98beqwa.glb",
+          "localPath": "public/assets/mint/turntable-chassis-collection/asset_pack_item_glb-vd75nctc66ayy4vqeqfqd5j39n8bfe21-2-ks73cktb5saa43xygfhpkhbdn98beqwa.glb",
+          "loaderHint": "gltf",
+          "byteSize": 646520,
+          "extensionsUsed": [],
+          "extensionsRequired": [],
+          "usesDraco": false,
+          "requiresDraco": false,
+          "usesMeshopt": false,
+          "requiresMeshopt": false,
+          "usesKtx2": false,
+          "requiresKtx2": false,
+          "unknownRequiredExtensions": []
+        },
+        "asset_pack_zip:vd75nctc66ayy4vqeqfqd5j39n8bfe21": {
+          "artifactId": "asset_pack_zip:vd75nctc66ayy4vqeqfqd5j39n8bfe21",
+          "role": "asset_bundle",
+          "format": "zip",
+          "contentType": "application/zip",
+          "filename": "side-one-player-chassis-collection--vd75nctc66ayy4vqeqfqd5j39n8bfe21.zip",
+          "localPath": "public/assets/mint/turntable-chassis-collection/asset_pack_zip-vd75nctc66ayy4vqeqfqd5j39n8bfe21.zip",
+          "loaderHint": "archive",
+          "byteSize": 1339277
+        },
+        "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:0": {
+          "artifactId": "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:0",
+          "role": "preview_image",
+          "format": "webp",
+          "contentType": "image/webp",
+          "filename": "walnut-console-dh8bfa87-preview.webp",
+          "localPath": "public/assets/mint/turntable-chassis-collection/preview_image-vd75nctc66ayy4vqeqfqd5j39n8bfe21-0.webp",
+          "loaderHint": "image",
+          "byteSize": 26850
+        },
+        "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:1": {
+          "artifactId": "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:1",
+          "role": "preview_image",
+          "format": "webp",
+          "contentType": "image/webp",
+          "filename": "studio-aluminium-dh8bfa87-preview.webp",
+          "localPath": "public/assets/mint/turntable-chassis-collection/preview_image-vd75nctc66ayy4vqeqfqd5j39n8bfe21-1.webp",
+          "loaderHint": "image",
+          "byteSize": 27236
+        },
+        "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:2": {
+          "artifactId": "preview_image:vd75nctc66ayy4vqeqfqd5j39n8bfe21:2",
+          "role": "preview_image",
+          "format": "webp",
+          "contentType": "image/webp",
+          "filename": "clear-acrylic-dh8bfa87-preview.webp",
+          "localPath": "public/assets/mint/turntable-chassis-collection/preview_image-vd75nctc66ayy4vqeqfqd5j39n8bfe21-2.webp",
+          "loaderHint": "image",
+          "byteSize": 45936
+        }
+      },
+      "thumbnailUrl": "public/assets/mint/turntable-chassis-collection/preview_image-vd75nctc66ayy4vqeqfqd5j39n8bfe21-0.webp"
+    },
+    "turntable-clear-acrylic": {
+      "source": {
+        "manifestVersion": 1,
+        "kind": "asset",
+        "assetType": "model",
+        "assetId": "ks754s6zy9mhrx2hj1k34kecdx8bex0e"
+      },
+      "transform": {
+        "position": [
+          0,
+          0,
+          0
+        ],
+        "rotation": [
+          0,
+          0,
+          0
+        ],
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "mode": "local_files",
+      "artifacts": {
+        "original_glb": {
+          "artifactId": "original_glb",
+          "role": "canonical_model",
+          "format": "glb",
+          "contentType": "model/gltf-binary",
+          "filename": "champagne-acrylic-plinth-dx8bex0e-original.glb",
+          "localPath": "public/assets/mint/turntable-clear-acrylic/original_glb.glb",
+          "loaderHint": "gltf",
+          "byteSize": 576204,
+          "extensionsUsed": [],
+          "extensionsRequired": [],
+          "usesDraco": false,
+          "requiresDraco": false,
+          "usesMeshopt": false,
+          "requiresMeshopt": false,
+          "usesKtx2": false,
+          "requiresKtx2": false,
+          "unknownRequiredExtensions": []
+        },
+        "preview_image": {
+          "artifactId": "preview_image",
+          "role": "preview_image",
+          "format": "webp",
+          "contentType": "image/webp",
+          "filename": "champagne-acrylic-plinth-dx8bex0e-preview.webp",
+          "localPath": "public/assets/mint/turntable-clear-acrylic/preview_image.webp",
+          "loaderHint": "image",
+          "byteSize": 26776
+        }
+      },
+      "thumbnailUrl": "public/assets/mint/turntable-clear-acrylic/preview_image.webp"
+    }
+  }
+}

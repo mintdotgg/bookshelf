@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Needle Archive.
+Thanks for helping improve Side One.
 
 ## Set up the project
 

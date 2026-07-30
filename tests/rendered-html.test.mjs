@@ -40,7 +40,10 @@ function assertNumericObjectClose(actual, expected, label, epsilon = 1e-12) {
 }
 
 function publicFileUrl(publicUrl) {
-  assert.match(publicUrl, /^\/records\/[a-z0-9-]+\/[a-z0-9-]+\.wav$/);
+  assert.match(
+    publicUrl,
+    /^\/records\/[a-z0-9-]+\/[a-z0-9-]+\.(?:jpg|wav)$/,
+  );
   return new URL(`public${publicUrl}`, projectRoot);
 }
 
@@ -112,7 +115,7 @@ function parseWav(buffer, label) {
   return dataBytes / format.byteRate;
 }
 
-test("server-renders the Needle Archive shell without provider branding", async () => {
+test("server-renders the Side One shell without provider branding", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -120,18 +123,22 @@ test("server-renders the Needle Archive shell without provider branding", async 
   const html = await response.text();
   assert.match(
     html,
-    /<title>Needle Archive — An Interactive Vinyl Collection<\/title>/i,
+    /<title>Side One — A Private Vinyl Catalog<\/title>/i,
   );
-  assert.match(html, /NEEDLE ARCHIVE/);
-  assert.match(html, /AN INTERACTIVE VINYL COLLECTION/);
-  assert.match(html, /08(?:<!-- -->)? PRESSINGS/);
-  assert.match(html, /01 CONTINUOUS ARCHIVE/);
+  assert.match(html, /SIDE ONE/);
+  assert.match(html, /A PRIVATE VINYL CATALOG/);
+  assert.match(html, /09(?:<!-- -->)? PRESSINGS/);
+  assert.match(html, /07(?:<!-- -->)? RELEASES/);
+  assert.match(html, /01 PRIVATE CATALOG/);
   assert.match(html, /data-testid="archive-canvas"/);
   assert.match(html, /data-testid="inspect-active"/);
   assert.match(html, /data-testid="album-panel"/);
   assert.match(html, /data-testid="preview-player"/);
-  assert.match(html, /aria-label="Music preview player"/);
-  assert.match(html, /Original demonstration artwork and audio/);
+  assert.match(html, /data-testid="open-local-import"/);
+  assert.match(html, /data-testid="open-local-audio"/);
+  assert.match(html, /aria-label="Vinyl audio player"/);
+  assert.match(html, /Official links for every record/);
+  assert.match(html, /Import local vinyl/);
 
   const { recordCatalog } = await import("../app/record-catalog.ts");
   const renderedPositions = recordCatalog.map((record) =>
@@ -147,7 +154,7 @@ test("server-renders the Needle Archive shell without provider branding", async 
   );
 
   assert.match(html, /og:image/);
-  assert.match(html, /\/social-card\.webp/);
+  assert.match(html, /\/side-one-social\.png/);
   assert.match(html, /summary_large_image/);
   assert.match(html, /1200/);
   assert.match(html, /630/);
@@ -165,11 +172,38 @@ test("server-renders the Needle Archive shell without provider branding", async 
   );
 });
 
-test("ships eight valid, unique, rights-safe starter records", async () => {
+test("keeps focused header controls clear of the open album panel", async () => {
+  const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.ok(
+    styles.includes("--album-panel-width: min(430px, 32vw);"),
+    "the desktop album panel exposes its width as a shared layout boundary",
+  );
+  assert.ok(
+    styles.includes("right: var(--album-panel-width);"),
+    "the focused header ends before the album panel begins",
+  );
+  assert.match(
+    styles,
+    /\.is-focused \.archive-header__actions \.local-import-trigger,\s*\.is-focused \.archive-count \{\s*display: none;/,
+    "catalog-management controls are removed while inspecting a record",
+  );
+  assert.match(
+    styles,
+    /@media \(max-width: 760px\)[\s\S]*?\.is-focused \.archive-header \{\s*right: 0;/,
+    "the header keeps the full viewport width above the bottom-sheet panel",
+  );
+});
+
+test("ships seven factual releases across nine physical pressings", async () => {
   const { RECORD_ASSET_ROOT, catalog, recordAssetUrl, recordCatalog } =
     await import("../app/record-catalog.ts");
 
-  assert.equal(recordCatalog.length, 8);
+  assert.equal(recordCatalog.length, 7);
+  assert.equal(
+    recordCatalog.reduce((total, record) => total + record.discCount, 0),
+    9,
+  );
   assert.equal(catalog, recordCatalog);
   assert.equal(RECORD_ASSET_ROOT, "/records");
   assert.equal(
@@ -181,6 +215,24 @@ test("ships eight valid, unique, rights-safe starter records", async () => {
   const recordTitles = new Set();
   const trackIds = new Set();
   const previewUrls = new Set();
+  const expectedTrackCounts = new Map([
+    ["the-essential-bob-dylan", 23],
+    ["lany", 16],
+    ["the-sun-comes-up", 13],
+    ["rumours", 11],
+    ["the-dark-side-of-the-moon", 10],
+    ["kind-of-blue", 5],
+    ["in-the-wee-small-hours", 16],
+  ]);
+  const expectedSideCounts = new Map([
+    ["the-essential-bob-dylan", { A: 7, B: 6, C: 5, D: 5 }],
+    ["lany", { A: 4, B: 4, C: 4, D: 4 }],
+    ["the-sun-comes-up", { A: 7, B: 6 }],
+    ["rumours", { A: 6, B: 5 }],
+    ["the-dark-side-of-the-moon", { A: 5, B: 5 }],
+    ["kind-of-blue", { A: 3, B: 2 }],
+    ["in-the-wee-small-hours", { A: 8, B: 8 }],
+  ]);
   const allowedMotifs = new Set([
     "signal-bloom",
     "tidal-lines",
@@ -218,27 +270,59 @@ test("ships eight valid, unique, rights-safe starter records", async () => {
     assert.ok((record.sleeveSize ?? 3) <= 2.25);
     assert.ok((record.sleeveThickness ?? 0) >= 0.035);
     assert.ok((record.sleeveThickness ?? 1) <= 0.05);
-    assert.equal(record.tracks.length, 2);
+    assert.ok(record.discCount === 1 || record.discCount === 2);
+    const expectedTrackCount = expectedTrackCounts.get(record.id);
+    assert.ok(expectedTrackCount, `${record.id} has an expected track count`);
+    assert.equal(record.tracks.length, expectedTrackCount);
+    assert.equal(record.coverImage, `/records/${record.id}/cover.jpg`);
+    const cover = await readFile(publicFileUrl(record.coverImage));
+    assert.equal(cover[0], 0xff, `${record.id} cover starts with JPEG SOI`);
+    assert.equal(cover[1], 0xd8, `${record.id} cover starts with JPEG SOI`);
+    assert.ok((record.links?.length ?? 0) >= 2);
+
+    const sideCounts = Object.create(null);
 
     for (const [index, track] of record.tracks.entries()) {
       assert.match(track.id, /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
       assert.ok(!trackIds.has(track.id), `duplicate track id: ${track.id}`);
       trackIds.add(track.id);
       assert.equal(track.trackNumber, index + 1);
-      assert.equal(track.side, index === 0 ? "A" : "B");
-      assert.ok((track.duration ?? 0) > 0);
-      assert.ok(track.previewUrl, `${record.id}/${track.id} has a preview`);
-      assert.equal(
-        track.previewUrl.startsWith(`/records/${record.id}/`),
-        true,
-        `${record.id}/${track.id} stays inside its record asset directory`,
-      );
+      assert.match(track.side ?? "", /^[A-D]$/);
       assert.ok(
-        !previewUrls.has(track.previewUrl),
-        `duplicate preview URL: ${track.previewUrl}`,
+        (track.sideTrackNumber ?? 0) >= 1 &&
+          (track.sideTrackNumber ?? 0) <= 8,
       );
-      previewUrls.add(track.previewUrl);
+      assert.equal(
+        track.discNumber,
+        track.side === "C" || track.side === "D" ? 2 : 1,
+      );
+      sideCounts[track.side] = (sideCounts[track.side] ?? 0) + 1;
+      assert.ok((track.discNumber ?? 1) <= record.discCount);
+      assert.ok((track.duration ?? 0) > 0);
+      if (track.previewUrl) {
+        assert.equal(
+          track.previewUrl.startsWith(`/records/${record.id}/`),
+          true,
+          `${record.id}/${track.id} stays inside its record asset directory`,
+        );
+        assert.ok(
+          !previewUrls.has(track.previewUrl),
+          `duplicate preview URL: ${track.previewUrl}`,
+        );
+        previewUrls.add(track.previewUrl);
+      } else {
+        assert.equal(
+          track.previewUrl,
+          undefined,
+          `${record.id}/${track.id} is metadata-only`,
+        );
+      }
     }
+    assert.deepEqual(
+      { ...sideCounts },
+      expectedSideCounts.get(record.id),
+      `${record.id} has the verified vinyl-side layout`,
+    );
 
     for (const link of record.links ?? []) {
       assert.match(link.url, /^https:\/\//);
@@ -246,9 +330,139 @@ test("ships eight valid, unique, rights-safe starter records", async () => {
     }
   }
 
-  assert.equal(recordIds.size, 8);
-  assert.equal(trackIds.size, 16);
-  assert.equal(previewUrls.size, 16);
+  assert.deepEqual([...recordIds], [
+    "the-essential-bob-dylan",
+    "lany",
+    "the-sun-comes-up",
+    "rumours",
+    "the-dark-side-of-the-moon",
+    "kind-of-blue",
+    "in-the-wee-small-hours",
+  ]);
+  assert.equal(trackIds.size, 94);
+  assert.equal(previewUrls.size, 0);
+
+  const lany = recordCatalog.find((record) => record.id === "lany");
+  assert.ok(lany);
+  assert.equal(lany.discCount, 2);
+  assert.deepEqual(
+    lany.tracks.map((track) => track.title),
+    [
+      "Dumb Stuff",
+      "The Breakup",
+      "Super Far",
+      "Overtime",
+      "Flowers on the Floor",
+      "Parents",
+      "ILYSB",
+      "13",
+      "Hericane",
+      "Hurts",
+      "Good Girls",
+      "Pancakes",
+      "Tampa",
+      "Purple Teeth",
+      "So, Soo Pretty",
+      "It Was Love",
+    ],
+  );
+  assert.deepEqual(
+    lany.tracks.map(
+      (track) => `${track.side}${track.sideTrackNumber}`,
+    ),
+    [
+      "A1",
+      "A2",
+      "A3",
+      "A4",
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "C1",
+      "C2",
+      "C3",
+      "C4",
+      "D1",
+      "D2",
+      "D3",
+      "D4",
+    ],
+  );
+
+  const theSunComesUp = recordCatalog.find(
+    (record) => record.id === "the-sun-comes-up",
+  );
+  assert.ok(theSunComesUp);
+  assert.equal(theSunComesUp.discCount, 1);
+  assert.equal(
+    theSunComesUp.coverImage,
+    "/records/the-sun-comes-up/cover.jpg",
+  );
+  assert.deepEqual(
+    theSunComesUp.tracks.map((track) => track.title),
+    [
+      "Believe It",
+      "Supercharger",
+      "Underground",
+      "tip toe",
+      "Falling",
+      "Slow",
+      "Wonderful",
+      "Make You Mine",
+      "Cloud Monsters",
+      "Let You Go",
+      "How High",
+      "Stay With Me",
+      "I'm Not Giving Up",
+    ],
+  );
+  assert.deepEqual(
+    theSunComesUp.tracks.map(
+      (track) => `${track.side}${track.sideTrackNumber}`,
+    ),
+    [
+      "A1",
+      "A2",
+      "A3",
+      "A4",
+      "A5",
+      "A6",
+      "A7",
+      "B1",
+      "B2",
+      "B3",
+      "B4",
+      "B5",
+      "B6",
+    ],
+  );
+
+  const sinatra = recordCatalog.find(
+    (record) => record.id === "in-the-wee-small-hours",
+  );
+  assert.ok(sinatra);
+  assert.deepEqual(
+    sinatra.tracks.map((track) => track.title),
+    [
+      "In the Wee Small Hours of the Morning",
+      "Mood Indigo",
+      "Glad to Be Unhappy",
+      "I Get Along Without You Very Well",
+      "Deep in a Dream",
+      "I See Your Face Before Me",
+      "Can't We Be Friends?",
+      "When Your Lover Has Gone",
+      "What Is This Thing Called Love?",
+      "Last Night When We Were Young",
+      "I'll Be Around",
+      "Ill Wind",
+      "It Never Entered My Mind",
+      "Dancing on the Ceiling",
+      "I'll Never Be the Same",
+      "This Love of Mine",
+    ],
+  );
 });
 
 test("every referenced preview is a sane local PCM WAV with catalog duration", async () => {
@@ -256,7 +470,7 @@ test("every referenced preview is a sane local PCM WAV with catalog duration", a
 
   for (const record of recordCatalog) {
     for (const track of record.tracks) {
-      assert.ok(track.previewUrl);
+      if (!track.previewUrl) continue;
       const label = `${record.id}/${track.id}`;
       const file = await readFile(publicFileUrl(track.previewUrl));
       const duration = parseWav(file, label);
@@ -304,8 +518,8 @@ test("playback reducer enforces legal commands and idempotent transitions", asyn
 
   state = reducePlaybackState(state, {
     type: "LOAD",
-    trackId: "platform-light",
-    src: "/records/afterimage-transit/preview-platform-light.wav",
+    trackId: "fixture-one",
+    src: "/records/test-fixtures/preview-one.wav",
   });
   assert.equal(state.mode, "loading");
   assert.equal(state.requestId, 1);
@@ -315,8 +529,8 @@ test("playback reducer enforces legal commands and idempotent transitions", asyn
   assert.equal(
     reducePlaybackState(state, {
       type: "LOAD",
-      trackId: "platform-light",
-      src: "/records/afterimage-transit/preview-platform-light.wav",
+      trackId: "fixture-one",
+      src: "/records/test-fixtures/preview-one.wav",
     }),
     state,
     "reloading the same pending track without autoplay is idempotent",
@@ -324,16 +538,16 @@ test("playback reducer enforces legal commands and idempotent transitions", asyn
 
   state = reducePlaybackState(state, {
     type: "LOAD",
-    trackId: "platform-light",
-    src: "/records/afterimage-transit/preview-platform-light.wav",
+    trackId: "fixture-one",
+    src: "/records/test-fixtures/preview-one.wav",
     autoplay: true,
   });
   assert.equal(state.requestId, 1);
   assert.equal(state.playWhenReady, true);
   const repeatedAutoplay = reducePlaybackState(state, {
     type: "LOAD",
-    trackId: "platform-light",
-    src: "/records/afterimage-transit/preview-platform-light.wav",
+    trackId: "fixture-one",
+    src: "/records/test-fixtures/preview-one.wav",
     autoplay: true,
   });
   assert.equal(repeatedAutoplay, state);
@@ -390,6 +604,14 @@ test("playback reducer enforces legal commands and idempotent transitions", asyn
   state = reducePlaybackState(state, { type: "PAUSE" });
   assert.equal(state.mode, "paused");
   assert.equal(reducePlaybackState(state, { type: "PAUSE" }), state);
+  assert.equal(
+    reducePlaybackState(state, {
+      type: "MEDIA_PLAYING",
+      requestId: state.requestId,
+    }),
+    state,
+    "a late playing event cannot undo an explicit pause",
+  );
   state = reducePlaybackState(state, { type: "PLAY" });
   assert.equal(state.mode, "cueing");
   state = reducePlaybackState(state, {
@@ -461,15 +683,15 @@ test("playback reducer rejects stale media events and recovers from errors", asy
 
   let state = reducePlaybackState(initialPlaybackState(), {
     type: "LOAD",
-    trackId: "platform-light",
-    src: "/records/afterimage-transit/preview-platform-light.wav",
+    trackId: "fixture-one",
+    src: "/records/test-fixtures/preview-one.wav",
     autoplay: true,
   });
   const firstRequest = state.requestId;
   state = reducePlaybackState(state, {
     type: "LOAD",
-    trackId: "blue-corridor",
-    src: "/records/night-geometry/preview-blue-corridor.wav",
+    trackId: "fixture-two",
+    src: "/records/test-fixtures/preview-two.wav",
     autoplay: true,
   });
   assert.equal(state.requestId, firstRequest + 1);
@@ -511,8 +733,8 @@ test("playback reducer rejects stale media events and recovers from errors", asy
 
   const retry = reducePlaybackState(state, {
     type: "LOAD",
-    trackId: "blue-corridor",
-    src: "/records/night-geometry/preview-blue-corridor.wav",
+    trackId: "fixture-two",
+    src: "/records/test-fixtures/preview-two.wav",
     autoplay: true,
   });
   assert.equal(retry.mode, "loading");
@@ -536,6 +758,18 @@ test("playback reducer rejects stale media events and recovers from errors", asy
   assert.equal(cleared.mode, "idle");
   assert.equal(cleared.error, null);
   assert.equal(cleared.currentTime, 0);
+
+  const linkedCatalogTrack = reducePlaybackState(retry, {
+    type: "SELECT_CATALOG_TRACK",
+    trackId: "dumb-stuff",
+    duration: 152,
+  });
+  assert.equal(linkedCatalogTrack.mode, "idle");
+  assert.equal(linkedCatalogTrack.trackId, "dumb-stuff");
+  assert.equal(linkedCatalogTrack.src, null);
+  assert.equal(linkedCatalogTrack.duration, 152);
+  assert.equal(linkedCatalogTrack.requestId, retry.requestId + 1);
+  assert.equal(linkedCatalogTrack.error, null);
 });
 
 test("keeps every sleeve footprint separated across all six browse phases", async () => {
@@ -681,9 +915,27 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
       roll: 0,
       scale: 1.03,
     },
-    extractedVinyl: {
+    sleeveMouthVinyl: {
+      x: -0.55,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1.03,
+    },
+    sleeveClearVinyl: {
       x: 0,
-      y: 1.42,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1.03,
+    },
+    extractedVinyl: {
+      x: 0.18,
+      y: 1.44,
       z: 1.72,
       pitch: Math.PI / 2,
       yaw: -0.08,
@@ -720,8 +972,25 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
     layout.sleevedVinyl,
   );
   assert.deepEqual(
+    cueMotionPose("extract-vinyl", 0.42, layout).vinyl,
+    layout.sleeveMouthVinyl,
+  );
+  assert.deepEqual(
+    cueMotionPose("extract-vinyl", 0.82, layout).vinyl,
+    layout.sleeveClearVinyl,
+  );
+  assert.deepEqual(
     cueMotionPose("extract-vinyl", 1, layout).vinyl,
     layout.extractedVinyl,
+  );
+  assert.equal(
+    cueMotionPose("extract-vinyl", 0.82, layout).vinyl.z,
+    layout.sleevedVinyl.z,
+    "the pressing stays at pocket depth until its trailing edge is clear",
+  );
+  assert.ok(
+    layout.sleeveClearVinyl.x - 0.5 >= layout.sleeveMouthVinyl.x + 0.05,
+    "the full pressing clears the sleeve mouth before moving forward",
   );
   assert.deepEqual(
     cueMotionPose("transport-to-turntable", 0, layout).vinyl,
@@ -984,6 +1253,14 @@ test("turntable model exposes articulated premium playback parts", async () => {
     "LatheGeometry",
   );
   assert.notEqual(model.platter, model.tonearmPivot);
+  assert.notEqual(model.shell, model.mechanism);
+  assert.equal(model.reveal.children.includes(model.shell), true);
+  assert.equal(model.reveal.children.includes(model.mechanism), true);
+  assert.equal(model.shell.getObjectByName("walnutPlinth") !== undefined, true);
+  assert.equal(
+    model.mechanism.getObjectByName("platterAssembly") !== undefined,
+    true,
+  );
   assert.equal(model.tonearmPivot.children.includes(model.tonearmLift), true);
   assert.equal(model.visualizerRings.length, 3);
 
@@ -995,6 +1272,79 @@ test("turntable model exposes articulated premium playback parts", async () => {
   });
   assert.ok(meshes >= 35, `expected authored detail, received ${meshes} meshes`);
   assert.ok(instancedMeshes >= 2, "repeated premium detail should be instanced");
+});
+
+test("turntable settings use stable variants and a shared Mint GLB loader", async () => {
+  const [
+    variantsModule,
+    loaderSource,
+    engineSource,
+    librarySource,
+  ] = await Promise.all([
+    import("../app/turntable-variants.ts"),
+    readFile(new URL("../app/assets/gltf-runtime.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+  ]);
+
+  const ids = variantsModule.turntableVariants.map((variant) => variant.id);
+  assert.deepEqual(ids, [
+    "archive-walnut",
+    "mint-walnut-console",
+    "mint-studio-aluminium",
+    "mint-clear-acrylic",
+  ]);
+  assert.equal(new Set(ids).size, ids.length);
+  assert.equal(
+    variantsModule.getTurntableVariant(
+      variantsModule.defaultTurntableVariantId,
+    ).available,
+    true,
+  );
+  assert.equal(
+    variantsModule.turntableVariants.every((variant) => variant.available),
+    true,
+  );
+  variantsModule.turntableVariants
+    .filter((variant) => variant.source === "mint")
+    .forEach((variant) => {
+      assert.match(variant.modelUrl, /^\/assets\/mint\/.+\.glb$/);
+      assert.match(variant.thumbnailUrl, /^\/assets\/mint\/.+\.webp$/);
+      assert.equal(variant.transform.scale.length, 3);
+    });
+  assert.match(loaderSource, /new DRACOLoader\(\)\.setDecoderPath\(path\)/);
+  assert.match(loaderSource, /\.setDRACOLoader\(/);
+  assert.match(loaderSource, /three-0\.184\.0/);
+  assert.match(engineSource, /async setTurntableVariant\(/);
+  assert.match(engineSource, /this\.turntableShell\.visible = false/);
+  assert.match(engineSource, /this\.turntableShell\.visible = true/);
+  assert.match(librarySource, /data-testid="open-settings"/);
+  assert.match(librarySource, /role="radiogroup"/);
+  assert.match(librarySource, /variant\.thumbnailUrl/);
+  assert.match(librarySource, /turntablePreferenceKey/);
+  assert.match(librarySource, /window\.localStorage\.setItem/);
+});
+
+test("vinyl-centered play control follows cue motion and toggles playback", async () => {
+  const [engineSource, librarySource] = await Promise.all([
+    readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+  ]);
+
+  const anchorStart = engineSource.indexOf("  private updateVinylAnchor() {");
+  const anchorEnd = engineSource.indexOf(
+    "  private applyFocusViewOffset(",
+    anchorStart,
+  );
+  const anchorSource = engineSource.slice(anchorStart, anchorEnd);
+  assert.doesNotMatch(anchorSource, /this\.cuePhase !== null/);
+  assert.match(anchorSource, /selected\.vinylLabel\.getWorldPosition/);
+  assert.match(
+    librarySource,
+    /onClick=\{\(\) => \(isPlaying \? pausePlayback\(\) : playTrack\(\)\)\}/,
+  );
+  assert.match(librarySource, /is-playing/);
+  assert.match(librarySource, /Pause selected track/);
 });
 
 test("engine owns the only animation loop and audio stays frame-loop free", async () => {
@@ -1033,6 +1383,72 @@ test("engine owns the only animation loop and audio stays frame-loop free", asyn
     library,
     /setState\s*\([^)]*(?:frequency|analyser|waveform)/i,
   );
+});
+
+test("archive keyboard navigation survives control focus and clears interrupted drags", async () => {
+  const engine = await readFile(
+    new URL("../app/RecordShelfEngine.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(engine, /window\.addEventListener\("keydown", this\.handleKeyDown\)/);
+  assert.match(engine, /window\.removeEventListener\("keydown", this\.handleKeyDown\)/);
+  assert.match(engine, /document\.addEventListener\("visibilitychange", this\.handleVisibilityChange\)/);
+  assert.match(engine, /this\.canvas\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(engine, /private clearPointerInteraction\(/);
+  assert.match(engine, /this\.clearPointerInteraction\(event\.pointerId\)/);
+  assert.match(engine, /this\.isEditableKeyboardTarget\(event\.target\)/);
+  assert.match(engine, /this\.isNativeActivationTarget\(event\.target\)/);
+});
+
+test("guards the local yt-dlp action behind an explicit authorization", async () => {
+  const [dialog, library, server] = await Promise.all([
+    readFile(
+      new URL("../app/YouTubeDownloadDialog.tsx", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../services/local-library/library.mjs", import.meta.url),
+      "utf8",
+    ),
+    readFile(
+      new URL("../services/local-library/server.mjs", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(dialog, /data-testid="youtube-download-confirm"/);
+  assert.match(dialog, /confirmedOwnership/);
+  assert.match(dialog, /Download with yt-dlp/);
+  assert.match(library, /"--no-playlist"/);
+  assert.match(library, /"bestaudio\/best"/);
+  assert.match(library, /"--js-runtimes"/);
+  assert.match(library, /runWithForbiddenRetry/);
+  assert.match(library, /sanitizeYtDlpOutput/);
+  assert.match(library, /shell: false/);
+  assert.match(library, /DOWNLOAD_AUTHORIZATION_REQUIRED/);
+  assert.match(server, /\/youtube-download/);
+  assert.match(server, /\/v1\/downloader\/status/);
+  assert.match(dialog, /fetchLocalDownloaderStatus/);
+  assert.match(dialog, /!downloaderReady/);
+});
+
+test("maps each saved file back to its exact song row in the UI", async () => {
+  const [catalog, manager, library, styles] = await Promise.all([
+    readFile(new URL("../app/record-catalog.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/LocalAudioManager.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(catalog, /localAudio\?: LocalTrackAudio/);
+  assert.match(library, /localAudio: localTrack\.localAudio/);
+  assert.match(library, /data-audio-ready=/);
+  assert.match(library, /local audio ready/);
+  assert.match(library, /track\.previewUrl \? "has-local-audio" : ""/);
+  assert.match(manager, /localAudio: nextTrack\.localAudio/);
+  assert.match(manager, /if \(completed > 0\) await onLibraryChanged\(\)/);
+  assert.match(styles, /content: "LOCAL"/);
 });
 
 test("exposes the safe vinyl diagnostics and command surface", async () => {

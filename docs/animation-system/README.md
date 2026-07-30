@@ -1,6 +1,6 @@
 # Motion, audio, and animation
 
-Needle Archive coordinates a shelf, sleeve inspection, turntable, audio
+Side One coordinates a shelf, sleeve inspection, turntable, audio
 playback, and accessible HTML without giving multiple systems ownership of the
 same frame. React owns durable interface state, `RecordShelfEngine` owns visual
 transition progress, `VinylAudioController` owns browser audio, and pure
@@ -233,12 +233,19 @@ tonearm first rotates over the selected groove and then lowers; the
 `onNeedleContact` callback starts audible playback only when the stylus reaches
 contact.
 
-Opening inspection animates the vinyl from fully enclosed to a staged position
-far enough out of the sleeve for its center label to remain visible.
-`RecordShelfEngine` projects that label position after the single render and
-updates one semantic HTML play button imperatively, avoiding frame-level React
-state. Cueing continues from the live staged pose rather than snapping the
-vinyl back into the jacket.
+Opening inspection animates the vinyl through three physical extraction
+waypoints: the pressing first slides at the pocket depth to the open edge, then
+continues until its trailing edge clears the mouth, and only then moves forward
+and tilts into the staged position. `sleeveOpeningContract` owns the right-edge
+direction, pocket depth, and clearance used for every jacket size.
+
+`RecordShelfEngine` projects the live label position after the single render
+and updates one semantic HTML play button imperatively, avoiding frame-level
+React state. That control stays centered on the pressing during extraction,
+transport, cueing, playback, pausing, and return. Its semantic action changes
+between Play and Pause without rotating the HTML control with the record.
+Cueing continues from the live staged pose rather than snapping the vinyl back
+into the jacket.
 
 During playback, `currentTime / duration` maps to `grooveProgress`, which moves
 the tonearm from lead-in to runout. Seeking raises the arm visually and updates
@@ -297,6 +304,24 @@ While playing, analyser energy affects:
 - stylus emissive intensity.
 
 Audio response falls back smoothly to zero when no analyser is available.
+
+## Turntable variants
+
+The turntable presentation is split into two groups:
+
+- `turntableProceduralShell` is the replaceable chassis;
+- `turntablePlaybackMechanism` owns the platter, spindle, tonearm, stylus, and
+  analyser-driven rings.
+
+`app/turntable-variants.ts` is the data owner for player IDs, labels, asset
+paths, transforms, and availability. `VinylLibrary` owns the selected setting
+and persists it under `side-one:turntable-variant`, with one-time migration
+from the former preference key.
+`RecordShelfEngine.setTurntableVariant()` swaps only the chassis, so playback
+state and mechanical alignment survive a visual change. Mint GLBs load through
+the shared Draco-capable helper in `app/assets/gltf-runtime.ts`; generated
+files and their synchronized metadata belong in the project-root
+`mint-assets.json`.
 
 ## Collision safety
 

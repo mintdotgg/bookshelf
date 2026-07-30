@@ -1,5 +1,5 @@
 {
-  "name": "needle-archive",
+  "name": "side-one-vinyl",
   "version": "0.1.0",
   "private": true,
   "engines": {
@@ -7,9 +7,12 @@
   },
   "scripts": {
     "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
+    "dev:local": "node --env-file-if-exists=.env.local scripts/dev-local.mjs",
+    "library:server": "node --env-file-if-exists=.env.local services/local-library/server.mjs",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --experimental-strip-types --test tests/rendered-html.test.mjs && npm run check:mint",
+    "test": "npm run build && node --experimental-strip-types --test tests/rendered-html.test.mjs && npm run test:local-library && npm run check:mint",
+    "test:local-library": "node --experimental-strip-types --test services/local-library/*.test.mjs",
     "check:mint": "node scripts/check-mint-tooling.mjs && node --test .agents/skills/mint-threejs-skills/scripts/sync-mint-assets.test.mjs",
     "generate:previews": "node --experimental-strip-types scripts/generate-record-previews.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",

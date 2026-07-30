@@ -297,6 +297,8 @@ export type TonearmPose = {
 
 export type CueMotionLayout = {
   sleevedVinyl: VinylPose;
+  sleeveMouthVinyl: VinylPose;
+  sleeveClearVinyl: VinylPose;
   extractedVinyl: VinylPose;
   turntableApproachVinyl: VinylPose;
   platterVinyl: VinylPose;
@@ -344,10 +346,30 @@ function vinylExtractionPose(
   progress: number,
   layout: CueMotionLayout,
 ): VinylPose {
+  const value = clamp01(progress);
+  const mouthEnd = 0.42;
+  const clearEnd = 0.82;
+
+  if (value <= mouthEnd) {
+    return interpolateVinylPose(
+      layout.sleevedVinyl,
+      layout.sleeveMouthVinyl,
+      value / mouthEnd,
+    );
+  }
+
+  if (value <= clearEnd) {
+    return interpolateVinylPose(
+      layout.sleeveMouthVinyl,
+      layout.sleeveClearVinyl,
+      (value - mouthEnd) / (clearEnd - mouthEnd),
+    );
+  }
+
   return interpolateVinylPose(
-    layout.sleevedVinyl,
+    layout.sleeveClearVinyl,
     layout.extractedVinyl,
-    progress,
+    (value - clearEnd) / (1 - clearEnd),
   );
 }
 

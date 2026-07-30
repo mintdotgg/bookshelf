@@ -1,0 +1,128 @@
+{
+  "viewport": {
+    "width": 1440,
+    "height": 1000
+  },
+  "build": "vinext production",
+  "runs": [
+    {
+      "variant": "Walnut Console",
+      "direction": "cue",
+      "phases": [
+        "idle",
+        "transport-to-turntable",
+        "lower-tonearm",
+        "playing"
+      ],
+      "frames": 18,
+      "collisionFree": true
+    },
+    {
+      "variant": "Walnut Console",
+      "direction": "return",
+      "phases": [
+        "return-to-sleeve",
+        "reinsert-vinyl",
+        "idle"
+      ],
+      "frames": 12,
+      "collisionFree": true
+    },
+    {
+      "variant": "Studio Aluminium",
+      "direction": "cue",
+      "phases": [
+        "idle",
+        "transport-to-turntable",
+        "lower-tonearm",
+        "playing"
+      ],
+      "frames": 16,
+      "collisionFree": true
+    },
+    {
+      "variant": "Studio Aluminium",
+      "direction": "return",
+      "phases": [
+        "raise-tonearm",
+        "return-to-sleeve",
+        "reinsert-vinyl",
+        "idle"
+      ],
+      "frames": 11,
+      "collisionFree": true
+    },
+    {
+      "variant": "Clear Acrylic",
+      "direction": "cue",
+      "phases": [
+        "idle",
+        "transport-to-turntable",
+        "lower-tonearm",
+        "playing"
+      ],
+      "frames": 17,
+      "collisionFree": true
+    },
+    {
+      "variant": "Clear Acrylic",
+      "direction": "return",
+      "phases": [
+        "raise-tonearm",
+        "return-to-sleeve",
+        "reinsert-vinyl",
+        "idle"
+      ],
+      "frames": 16,
+      "collisionFree": true
+    }
+  ],
+  "readyStates": [
+    {
+      "collisionFree": "true",
+      "cuePhase": "idle",
+      "drawCalls": "79",
+      "engine": "three.js r185",
+      "geometries": "135",
+      "motionPhase": "idle",
+      "pixelRatio": "1.75",
+      "playbackMode": "idle",
+      "sceneMode": "inspect",
+      "testid": "archive-canvas",
+      "textures": "28",
+      "triangles": "47688",
+      "turntableVariant": "mint-studio-aluminium"
+    },
+    {
+      "collisionFree": "true",
+      "cuePhase": "idle",
+      "drawCalls": "79",
+      "engine": "three.js r185",
+      "geometries": "135",
+      "motionPhase": "idle",
+      "pixelRatio": "1.75",
+      "playbackMode": "idle",
+      "sceneMode": "inspect",
+      "testid": "archive-canvas",
+      "textures": "28",
+      "triangles": "47882",
+      "turntableVariant": "mint-clear-acrylic"
+    }
+  ],
+  "finalState": {
+    "collisionFree": "true",
+    "cuePhase": "idle",
+    "drawCalls": "79",
+    "engine": "three.js r185",
+    "geometries": "135",
+    "motionPhase": "idle",
+    "pixelRatio": "1.75",
+    "playbackMode": "idle",
+    "sceneMode": "inspect",
+    "testid": "archive-canvas",
+    "textures": "28",
+    "triangles": "47882",
+    "turntableVariant": "mint-clear-acrylic"
+  },
+  "browserIssues": []
+}

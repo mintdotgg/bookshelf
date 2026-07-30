@@ -1,0 +1,35 @@
+{
+  "basis": "turntable mechanism local space, Y up",
+  "results": [
+    {
+      "variant": "Walnut Console",
+      "chassisMinY": -0.22383600008487703,
+      "chassisMaxY": 0.4898360313773155,
+      "platterWellBottomY": 0.495,
+      "clearanceToPlatterWell": 0.005163968622684478,
+      "platterMatTopY": 0.7000000000000001,
+      "recordBottomY": 0.7030000000000001,
+      "recordToMatClearance": 0.0030000000000000027
+    },
+    {
+      "variant": "Studio Aluminium",
+      "chassisMinY": -0.19621296997368334,
+      "chassisMaxY": 0.49021283772587776,
+      "platterWellBottomY": 0.495,
+      "clearanceToPlatterWell": 0.004787162274122236,
+      "platterMatTopY": 0.7000000000000001,
+      "recordBottomY": 0.7030000000000001,
+      "recordToMatClearance": 0.0030000000000000027
+    },
+    {
+      "variant": "Clear Acrylic",
+      "chassisMinY": -0.216125,
+      "chassisMaxY": 0.49012500000000003,
+      "platterWellBottomY": 0.495,
+      "clearanceToPlatterWell": 0.004874999999999963,
+      "platterMatTopY": 0.7000000000000001,
+      "recordBottomY": 0.7030000000000001,
+      "recordToMatClearance": 0.0030000000000000027
+    }
+  ]
+}

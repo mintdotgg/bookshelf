@@ -30,11 +30,11 @@ export async function generateMetadata(): Promise<Metadata> {
       siteName: siteConfig.applicationName,
       images: [
         {
-          url: `${origin}/social-card.webp`,
+          url: `${origin}/side-one-social.png`,
           width: 1200,
           height: 630,
           alt: siteConfig.socialImageAlt,
-          type: "image/webp",
+          type: "image/png",
         },
       ],
     },
@@ -42,7 +42,7 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
-      images: [`${origin}/social-card.webp`],
+      images: [`${origin}/side-one-social.png`],
     },
   };
 }
@@ -51,7 +51,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
-  themeColor: "#e7dfd1",
+  themeColor: "#f2f0eb",
   colorScheme: "light",
 };
 

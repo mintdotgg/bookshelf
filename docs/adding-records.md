@@ -40,6 +40,7 @@ Add an object to `recordCatalog`:
   vinylOpacity: 0.82,
   vinylMarbling: true,
   rpm: 33.333,
+  discCount: 1,
 
   tracks: [
     {
@@ -47,6 +48,8 @@ Add an object to `recordCatalog`:
       title: "First Light",
       trackNumber: 1,
       side: "A",
+      sideTrackNumber: 1,
+      discNumber: 1,
       duration: 18,
       previewUrl: recordAssetUrl("my-record", "preview-first-light.wav"),
     },
@@ -55,6 +58,8 @@ Add an object to `recordCatalog`:
       title: "Evening Return",
       trackNumber: 2,
       side: "B",
+      sideTrackNumber: 1,
+      discNumber: 1,
       duration: 18,
       previewUrl: recordAssetUrl("my-record", "preview-evening-return.wav"),
     },
@@ -100,6 +105,7 @@ root-relative browser URLs yourself.
 | `vinylOpacity` | No | Pressing opacity from `0` to `1`; defaults to opaque. |
 | `vinylMarbling` | No | Adds deterministic colored arc details when true. |
 | `rpm` | Yes | Either `33.333` or `45`; controls platter rotation. |
+| `discCount` | Yes | `1` for an A/B release or `2` for a double LP with sides A–D. |
 | `tracks` | Yes | Ordered preview tracks for this release. |
 | `links` | No | HTTPS links shown in the details panel. |
 | `featured` | No | Catalog-level flag available for custom presentation rules. |
@@ -128,14 +134,17 @@ them.
 | `id` | Yes | Stable track key, unique within the record. |
 | `title` | Yes | Track title shown in the list and player. |
 | `trackNumber` | Yes | Numeric order printed on procedural art. |
-| `side` | No | `"A"` or `"B"` for display and label filtering. |
+| `side` | No | `"A"`, `"B"`, `"C"`, or `"D"` for display and label filtering. |
+| `sideTrackNumber` | No | Track number printed within that side, such as the `3` in `C3`. |
+| `discNumber` | No | `1` for sides A/B or `2` for sides C/D. |
 | `duration` | No | Expected preview duration in seconds before media metadata loads. |
 | `previewUrl` | No | Browser URL for audio the project may redistribute. |
 
-Omitting `previewUrl` is supported. Selecting or trying to play that track
-produces a useful error and leaves the album in a stable inspect pose; it does
-not wait indefinitely. An unreadable or failed source is handled the same way
-and initiates the controlled vinyl-return path if cueing had begun.
+Omitting `previewUrl` is supported for metadata-only or officially linked
+commercial releases. Selecting the track updates the displayed pressing and
+label, leaves playback disabled, and directs the listener to the record-level
+official links. An unreadable configured source still produces an announced
+error and initiates the controlled vinyl-return path if cueing had begun.
 
 Catalog order is source order. Moving an object in `recordCatalog` changes its
 shelf position and diagnostics index.
@@ -257,10 +266,10 @@ preview generator.
 
 Edit `app/site-config.ts` to change document metadata, application name,
 wordmark, collection name, UI labels, social-image alternative text,
-independence note, and theme tokens. Replace `public/social-card.webp` and
+independence note, and theme tokens. Replace `public/side-one-social.png` and
 other icons with media you own if the identity changes.
 
-Catalog artwork does not depend on the Needle Archive wordmark, so a fork can
+Catalog artwork does not depend on the Side One wordmark, so a fork can
 rebrand without altering record art.
 
 ## 7. Validate
@@ -277,9 +286,9 @@ Then run the production experience in a browser and check:
 1. the new record appears in the expected source order;
 2. browse and focus routes remain collision-free;
 3. procedural and optional image faces have the correct orientation;
-4. both tracks load, cue, play, pause, seek, stop, and return;
+4. every local preview loads, cues, plays, pauses, seeks, stops, and returns;
 5. changing tracks while playing restores the current vinyl first;
-6. a missing preview produces a stable, announced error;
+6. a metadata-only track stays stable and exposes its official listening links;
 7. keyboard, pointer, touch-emulated, and reduced-motion paths work;
 8. the desktop and approximately 390 × 844 layouts remain usable;
 9. `window.__VINYL_LIBRARY__.diagnostics()` reports no current collision and

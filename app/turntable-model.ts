@@ -55,6 +55,8 @@ export function spindleClearance() {
 export type TurntableModel = {
   root: THREE.Group;
   reveal: THREE.Group;
+  shell: THREE.Group;
+  mechanism: THREE.Group;
   platter: THREE.Group;
   platterMaterial: THREE.MeshPhysicalMaterial;
   tonearmPivot: THREE.Group;
@@ -132,6 +134,14 @@ export function createTurntableModel(): TurntableModel {
   reveal.name = "turntablePresentation";
   root.add(reveal);
 
+  const shell = new THREE.Group();
+  shell.name = "turntableProceduralShell";
+  reveal.add(shell);
+
+  const mechanism = new THREE.Group();
+  mechanism.name = "turntablePlaybackMechanism";
+  reveal.add(mechanism);
+
   const walnut = physical("#5a3827", {
     roughness: 0.48,
     metalness: 0.015,
@@ -172,10 +182,10 @@ export function createTurntableModel(): TurntableModel {
     roughness: 0.52,
     metalness: 0.03,
   });
-  const accent = physical("#a13f2f", {
+  const accent = physical("#d6402f", {
     roughness: 0.35,
     metalness: 0.3,
-    emissive: new THREE.Color("#a13f2f"),
+    emissive: new THREE.Color("#d6402f"),
     emissiveIntensity: 0.12,
   });
 
@@ -186,7 +196,7 @@ export function createTurntableModel(): TurntableModel {
     walnutEdge,
   );
   lowerBand.position.y = -0.03;
-  reveal.add(lowerBand);
+  shell.add(lowerBand);
 
   const plinth = rounded(
     "walnutPlinth",
@@ -195,7 +205,7 @@ export function createTurntableModel(): TurntableModel {
     walnut,
   );
   plinth.position.y = 0.12;
-  reveal.add(plinth);
+  shell.add(plinth);
 
   const topPlate = rounded(
     "brushedTopPlate",
@@ -204,7 +214,7 @@ export function createTurntableModel(): TurntableModel {
     deck,
   );
   topPlate.position.y = 0.39;
-  reveal.add(topPlate);
+  shell.add(topPlate);
 
   const insetBorder = rounded(
     "topPlateInset",
@@ -213,7 +223,7 @@ export function createTurntableModel(): TurntableModel {
     walnutEdge,
   );
   insetBorder.position.y = 0.47;
-  reveal.add(insetBorder);
+  shell.add(insetBorder);
 
   const footGeometry = new THREE.CylinderGeometry(0.17, 0.2, 0.2, 32);
   [
@@ -226,7 +236,7 @@ export function createTurntableModel(): TurntableModel {
     foot.name = `isolationFoot:${index}`;
     foot.position.set(x, y, z);
     foot.castShadow = true;
-    reveal.add(foot);
+    shell.add(foot);
 
     const footRing = cylinder(
       `isolationFootRing:${index}`,
@@ -237,13 +247,13 @@ export function createTurntableModel(): TurntableModel {
       brushedMetal,
     );
     footRing.position.set(x, y + 0.1, z);
-    reveal.add(footRing);
+    shell.add(footRing);
   });
 
   const platter = new THREE.Group();
   platter.name = "platterAssembly";
   platter.position.set(-0.55, 0.56, -0.02);
-  reveal.add(platter);
+  mechanism.add(platter);
 
   const platterWell = cylinder(
     "platterWell",
@@ -271,7 +281,7 @@ export function createTurntableModel(): TurntableModel {
     metalness: 0.44,
     clearcoat: 0.5,
     clearcoatRoughness: 0.2,
-    emissive: new THREE.Color("#a13f2f"),
+    emissive: new THREE.Color("#d6402f"),
     emissiveIntensity: 0.01,
   });
   const mat = cylinder(
@@ -361,7 +371,7 @@ export function createTurntableModel(): TurntableModel {
     rubber,
   );
   pitchRail.position.set(-1.43, 0.5, 0.06);
-  reveal.add(pitchRail);
+  shell.add(pitchRail);
 
   const pitchFader = rounded(
     "pitchFader",
@@ -370,7 +380,7 @@ export function createTurntableModel(): TurntableModel {
     brushedMetal,
   );
   pitchFader.position.set(-1.43, 0.55, -0.08);
-  reveal.add(pitchFader);
+  shell.add(pitchFader);
 
   const powerKnob = cylinder(
     "powerKnob",
@@ -381,7 +391,7 @@ export function createTurntableModel(): TurntableModel {
     brushedMetal,
   );
   powerKnob.position.set(-1.43, 0.54, 0.84);
-  reveal.add(powerKnob);
+  shell.add(powerKnob);
 
   const powerCap = cylinder(
     "powerKnobCap",
@@ -392,7 +402,7 @@ export function createTurntableModel(): TurntableModel {
     darkMetal,
   );
   powerCap.position.set(-1.43, 0.56, 0.84);
-  reveal.add(powerCap);
+  shell.add(powerCap);
 
   [-0.02, 0.28].forEach((z, index) => {
     const speedButton = cylinder(
@@ -404,7 +414,7 @@ export function createTurntableModel(): TurntableModel {
       index === 0 ? accent : brushedMetal,
     );
     speedButton.position.set(1.38, 0.53, z);
-    reveal.add(speedButton);
+    shell.add(speedButton);
   });
 
   const cueLeverBase = cylinder(
@@ -416,7 +426,7 @@ export function createTurntableModel(): TurntableModel {
     darkMetal,
   );
   cueLeverBase.position.set(1.31, 0.53, 0.73);
-  reveal.add(cueLeverBase);
+  shell.add(cueLeverBase);
 
   const cueLever = cylinder(
     "cueLever",
@@ -428,7 +438,7 @@ export function createTurntableModel(): TurntableModel {
   );
   cueLever.rotation.z = -0.46;
   cueLever.position.set(1.22, 0.65, 0.73);
-  reveal.add(cueLever);
+  shell.add(cueLever);
 
   const cueHandle = cylinder(
     "cueLeverHandle",
@@ -440,7 +450,7 @@ export function createTurntableModel(): TurntableModel {
   );
   cueHandle.rotation.z = -0.46;
   cueHandle.position.set(1.16, 0.73, 0.73);
-  reveal.add(cueHandle);
+  shell.add(cueHandle);
 
   const armBase = cylinder(
     "tonearmBase",
@@ -451,7 +461,7 @@ export function createTurntableModel(): TurntableModel {
     darkMetal,
   );
   armBase.position.set(1.05, 0.58, -0.62);
-  reveal.add(armBase);
+  mechanism.add(armBase);
 
   const armBaseRing = cylinder(
     "tonearmBaseRing",
@@ -462,7 +472,7 @@ export function createTurntableModel(): TurntableModel {
     brushedMetal,
   );
   armBaseRing.position.set(1.05, 0.51, -0.62);
-  reveal.add(armBaseRing);
+  mechanism.add(armBaseRing);
 
   const gimbalOuter = new THREE.Mesh(
     new THREE.TorusGeometry(0.2, 0.027, 14, 56),
@@ -471,12 +481,12 @@ export function createTurntableModel(): TurntableModel {
   gimbalOuter.name = "tonearmGimbalOuter";
   gimbalOuter.rotation.x = Math.PI / 2;
   gimbalOuter.position.set(1.05, 0.75, -0.62);
-  reveal.add(gimbalOuter);
+  mechanism.add(gimbalOuter);
 
   const tonearmPivot = new THREE.Group();
   tonearmPivot.name = "tonearmPivot";
   tonearmPivot.position.set(1.05, 0.76, -0.62);
-  reveal.add(tonearmPivot);
+  mechanism.add(tonearmPivot);
 
   const tonearmLift = new THREE.Group();
   tonearmLift.name = "tonearmLift";
@@ -559,7 +569,7 @@ export function createTurntableModel(): TurntableModel {
       color: "#e5d8c2",
       roughness: 0.34,
       metalness: 0.34,
-      emissive: "#a13f2f",
+      emissive: "#d6402f",
       emissiveIntensity: 0.22,
     }),
   );
@@ -577,7 +587,7 @@ export function createTurntableModel(): TurntableModel {
         112,
       ),
       new THREE.MeshBasicMaterial({
-        color: index === 1 ? "#b18a52" : "#a13f2f",
+        color: index === 1 ? "#969188" : "#d6402f",
         transparent: true,
         opacity: 0,
         depthWrite: false,
@@ -587,7 +597,7 @@ export function createTurntableModel(): TurntableModel {
     visualizer.name = `audioRing:${index}`;
     visualizer.rotation.x = -Math.PI / 2;
     visualizer.position.set(-0.55, 0.74 + index * 0.009, -0.02);
-    reveal.add(visualizer);
+    mechanism.add(visualizer);
     visualizerRings.push(visualizer);
   }
 
@@ -598,7 +608,7 @@ export function createTurntableModel(): TurntableModel {
     cream,
   );
   badgePlate.position.set(0.89, 0.51, 0.91);
-  reveal.add(badgePlate);
+  shell.add(badgePlate);
 
   const badgeLine = new THREE.Mesh(
     new THREE.PlaneGeometry(0.48, 0.018),
@@ -611,11 +621,13 @@ export function createTurntableModel(): TurntableModel {
   badgeLine.name = "makerBadgeLine";
   badgeLine.rotation.x = -Math.PI / 2;
   badgeLine.position.set(0.89, 0.526, 0.91);
-  reveal.add(badgeLine);
+  shell.add(badgeLine);
 
   return {
     root,
     reveal,
+    shell,
+    mechanism,
     platter,
     platterMaterial,
     tonearmPivot,

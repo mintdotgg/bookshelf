@@ -1,17 +1,19 @@
-# Needle Archive
+# Side One
 
-Needle Archive is a tactile Three.js vinyl collection viewer and music-preview
-player. Browse a shelf, pull a sleeve forward, inspect the pressing, choose a
-track, and watch the record move to a turntable before the needle drops.
+Side One is a tactile Three.js vinyl catalog and local music player. Browse a
+shelf, bring a sleeve forward, inspect the pressing, choose a track, and watch
+the record move to a turntable before the needle drops.
 
-The included eight-record catalog, procedural sleeve art, fictional release
-metadata, and synthesized previews are original demonstration content. The
-project is designed to be forked and filled with artwork and audio you own or
-are authorized to distribute.
+The included catalog contains seven factual releases and nine physical
+pressings: *The Essential Bob Dylan*, LANY, Louis The Child's *The Sun Comes
+Up*, Fleetwood Mac's *Rumours*, Pink Floyd's *The Dark Side of the Moon*, and
+Miles Davis's *Kind of Blue*, plus Frank Sinatra's *In the Wee Small Hours*.
+Every entry includes its complete vinyl-side track sequence and official
+listening or release links. Commercial recordings are not bundled.
 
 ## Features
 
-- Browse with drag, wheel, arrow keys, Home, End, or the archive index.
+- Browse with drag, wheel, arrow keys, Home, End, or the collection index.
 - See the full catalog together in an open walnut record cabinet with a
   deliberate air gap between every shelved sleeve.
 - Read the selected cover flat to the camera as a thin, open-sided cardstock
@@ -22,16 +24,23 @@ are authorized to distribute.
   the pocket mouth flexes and the pressing slides into its staged position.
 - Replace generated front, back, and label art independently; failed optional
   images fall back to deterministic procedural artwork.
+- Browse complete album track lists and select the correct pressing across
+  single-LP A/B and double-LP A–D releases.
 - Load one preview source at a time through a reusable media element and Web
   Audio analyser.
 - Remove the vinyl, move it to the platter, lower the tonearm, follow the groove
   while playing, and reverse the sequence on stop.
+- Watch the pressing clear the sleeve mouth before it lifts toward the player;
+  the accessible center control follows the record and becomes Pause while it
+  spins.
 - Return the pressing through the same sleeve path before the closed jacket
   moves back into the archive.
 - Start playback from an accessible control anchored to the exposed record
   label, then hand off to the persistent transport controls.
 - Pause, seek, change tracks, adjust volume, or return to the shelf without
   creating competing animation loops.
+- Choose a player chassis in Settings without replacing the precision platter,
+  spindle, or articulated tonearm mechanism.
 - Respect keyboard navigation, visible focus, touch input, safe areas, and
   reduced-motion preferences.
 
@@ -48,16 +57,47 @@ npm ci
 npm run dev
 ```
 
-The committed preview files are ready to use. To deterministically rebuild all
-starter WAV files from the catalog:
+To enable the private filesystem-backed import flow, add Spotify developer
+credentials to `.env.local`, register
+`http://127.0.0.1:4317/v1/spotify/callback`, and run:
+
+```bash
+npm run dev:local
+```
+
+The **Import local vinyl** dialog reads Spotify track, album, or playlist
+metadata, caches the cover on this computer, and attaches audio files you own or
+are authorized to keep. It stores manifests, artwork, and audio beneath the
+gitignored `.local-vinyl-library/` directory. There is no database, cloud media
+store, or hosted job service. The existing 3D cardstock sleeve paints the local
+cover onto both its front and back artwork surfaces.
+
+The **Local audio** manager syncs all seven catalog releases into the private
+helper and includes any Spotify imports already on the shelf. It searches
+YouTube locally with `yt-dlp`, ranks likely official audio by title, artist,
+channel, and duration, and keeps uncertain results out of the automatic
+download queue. For media you own or are authorized to keep, it can then save
+the verified queue sequentially with local `yt-dlp` and FFmpeg. Individual
+tracks still accept a manually selected direct YouTube video URL. Matches,
+recordings, and authorization state stay on this computer. Successfully
+attached songs receive a **Local** marker in their album track list; the
+association uses stable record and track IDs rather than queue position.
+
+See [Local filesystem library](docs/local-library.md) for setup, file layout,
+playlist authorization, limits, deletion, and tests.
+
+The seed catalog is metadata-only. For contributor-owned records that configure
+local `previewUrl` values, the project can deterministically generate
+placeholder WAV files:
 
 ```bash
 npm run generate:previews
 ```
 
 That command writes an 18-second mono PCM WAV to every configured
-`previewUrl`. It overwrites those files, so do not run it after replacing them
-with custom audio unless that is intentional.
+`previewUrl`. It does nothing to the seven bundled commercial releases and
+overwrites configured local previews, so do not run it after replacing those
+files with custom audio unless that is intentional.
 
 ## Controls
 
@@ -65,7 +105,7 @@ In browse mode:
 
 - Drag or scroll to move through the archive.
 - Use Left/Right, Home, or End when the canvas has keyboard focus.
-- Press Enter or click **Pull from archive** to inspect the centered record.
+- Press Enter or click **View record** to inspect the centered record.
 - A short pointer movement is treated as a click; a shelf swipe is not.
 
 In inspect mode:
@@ -73,7 +113,9 @@ In inspect mode:
 - Drag to orbit, scroll to zoom, and use **Reset view** to restore framing.
 - Select a track, then play from the record label or use the persistent
   Play/Pause, Stop, seek, and volume controls.
-- Press Escape or choose **Return to archive**. Active playback is stopped and
+- For linked commercial releases without bundled audio, select any track to
+  update the disc and label, then use the official listening links.
+- Press Escape or choose **Back to collection**. Active playback is stopped and
   the vinyl is reinserted before the sleeve returns to the shelf.
 
 ## Add your own records
@@ -120,6 +162,10 @@ state:
   helpers.
 - `app/record-art.ts` creates deterministic Canvas textures.
 - `app/record-catalog.ts` defines record and track data.
+- `app/local-library.ts` connects the client to the loopback filesystem helper.
+- `services/local-library/` imports metadata and artwork, scans manifests,
+  matches YouTube candidates, accepts authorized local audio, and serves
+  seekable media without a database.
 - `app/site-config.ts` centralizes product copy and theme tokens.
 
 The scene and playback state machines remain separate. The engine samples the
@@ -138,7 +184,7 @@ The client exposes a safe command surface after initialization:
 window.__VINYL_LIBRARY__.diagnostics()
 window.__VINYL_LIBRARY__.browse(3)
 window.__VINYL_LIBRARY__.focus(3)
-window.__VINYL_LIBRARY__.play("useful-motion")
+window.__VINYL_LIBRARY__.play("dumb-stuff")
 window.__VINYL_LIBRARY__.pause()
 window.__VINYL_LIBRARY__.stop()
 window.__VINYL_LIBRARY__.resetView()
@@ -175,11 +221,12 @@ Only commit artwork, recordings, descriptions, marks, and other media you
 created or are authorized to redistribute. Public availability is not an
 open-source license.
 
-The included preview generator uses oscillators and deterministic noise; it
-does not read sample libraries or third-party recordings. The procedural art
-generator draws from catalog metadata and does not download cover art. See
-[Third-party notices](THIRD_PARTY_NOTICES.md) and the licensing section in
-[Adding records](docs/adding-records.md).
+The preview generator uses oscillators and deterministic noise; it does not
+read sample libraries or third-party recordings. The bundled cover images are
+catalog-display copies sourced through the Cover Art Archive and remain the
+property of their respective rights holders. The application does not bundle
+commercial audio. See [Third-party notices](THIRD_PARTY_NOTICES.md) and the
+licensing section in [Adding records](docs/adding-records.md).
 
 ## Deployment
 

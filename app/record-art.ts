@@ -1,6 +1,7 @@
 import type {
   CatalogRecord,
   RecordMotif,
+  RecordSide,
   RecordTrack,
 } from "./record-catalog";
 
@@ -427,7 +428,7 @@ function drawMotif(
 
 function formatTrack(track: RecordTrack) {
   const prefix = track.side
-    ? `${track.side}${track.trackNumber}`
+    ? `${track.side}${track.sideTrackNumber ?? track.trackNumber}`
     : String(track.trackNumber).padStart(2, "0");
   return `${prefix}  ${track.title}`;
 }
@@ -526,14 +527,22 @@ export function createBackCover(record: CatalogRecord) {
   ctx.fillStyle = record.accent;
   ctx.fillRect(59, trackStart, 76, 4);
 
+  const trackColumns = record.discCount > 1 ? record.discCount : 1;
+  const tracksPerColumn = Math.ceil(record.tracks.length / trackColumns);
+  const trackColumnGap = 28;
+  const trackColumnWidth =
+    (canvas.width - 118 - trackColumnGap * (trackColumns - 1)) / trackColumns;
+  const trackLineHeight = 24;
   ctx.fillStyle = record.ink;
-  ctx.font = `560 17px ${sans}`;
+  ctx.font = `560 ${trackColumns > 1 ? 14 : 16}px ${sans}`;
   record.tracks.forEach((track, index) => {
+    const column = Math.floor(index / tracksPerColumn);
+    const row = index % tracksPerColumn;
     ctx.fillText(
       formatTrack(track),
-      59,
-      trackStart + 31 + index * 31,
-      canvas.width - 118,
+      59 + column * (trackColumnWidth + trackColumnGap),
+      trackStart + 31 + row * trackLineHeight,
+      trackColumnWidth,
     );
   });
 
@@ -602,7 +611,7 @@ export function createSpineCover(record: CatalogRecord) {
 
 export function createRecordLabel(
   record: CatalogRecord,
-  side: "A" | "B" = "A",
+  side: RecordSide = "A",
 ) {
   const canvas = createCanvas(LABEL_RESOLUTION);
   const ctx = canvas.getContext("2d");
@@ -660,7 +669,13 @@ export function createRecordLabel(
 
   ctx.font = `600 14px ${sans}`;
   ctx.letterSpacing = "1.4px";
-  const footer = [record.catalogNumber, `${record.rpm} RPM`]
+  const discNumber =
+    record.tracks.find((track) => track.side === side)?.discNumber ?? 1;
+  const footer = [
+    record.catalogNumber,
+    record.discCount > 1 ? `LP ${discNumber}` : undefined,
+    `${record.rpm} RPM`,
+  ]
     .filter(Boolean)
     .join("  ·  ");
   ctx.fillText(footer, center, 400, 340);

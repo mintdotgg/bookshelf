@@ -30,6 +30,11 @@ export type PlaybackAction =
       src: string;
       autoplay?: boolean;
     }
+  | {
+      type: "SELECT_CATALOG_TRACK";
+      trackId: string;
+      duration?: number;
+    }
   | { type: "PLAY" }
   | { type: "PAUSE" }
   | { type: "SEEK"; time: number }
@@ -85,6 +90,22 @@ export function reducePlaybackState(
   switch (action.type) {
     case "LOAD":
       return loadTrack(state, action);
+    case "SELECT_CATALOG_TRACK":
+      return {
+        ...state,
+        mode: "idle",
+        requestId: state.requestId + 1,
+        trackId: action.trackId,
+        src: null,
+        currentTime: 0,
+        duration: Math.max(
+          Number.isFinite(action.duration) ? (action.duration ?? 0) : 0,
+          0,
+        ),
+        error: null,
+        playWhenReady: false,
+        resumeAfterSeek: "paused",
+      };
     case "PLAY":
       return requestPlay(state);
     case "PAUSE":
@@ -122,6 +143,17 @@ export function reducePlaybackState(
         !isCurrentRequest(state, action.requestId) ||
         state.mode === "stopping" ||
         state.mode === "error"
+      ) {
+        return state;
+      }
+      if (
+        state.mode !== "playing" &&
+        state.mode !== "cueing" &&
+        !state.playWhenReady &&
+        !(
+          state.mode === "seeking" &&
+          state.resumeAfterSeek === "playing"
+        )
       ) {
         return state;
       }

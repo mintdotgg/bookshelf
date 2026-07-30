@@ -1,7 +1,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import type { CatalogRecord } from "./record-catalog";
+import type {
+  CatalogRecord,
+  RecordSide,
+  RecordTrack,
+  VinylDiscNumber,
+} from "./record-catalog";
 import {
   browsePhaseDuration,
   browseRecordMotionPose,
@@ -27,7 +32,10 @@ import {
   createLabelArt,
   createSpineCover,
 } from "./record-art";
-import { createSleeveModel } from "./sleeve-model";
+import {
+  createSleeveModel,
+  sleeveOpeningContract,
+} from "./sleeve-model";
 import {
   createLogBandLayout,
   smoothBandLevels,
@@ -40,6 +48,16 @@ import {
   platterRecordCenterY,
   vinylSpec,
 } from "./turntable-model";
+import {
+  defaultTurntableVariantId,
+  getTurntableVariant,
+  type TurntableVariantId,
+} from "./turntable-variants";
+import {
+  disposeMintGltfRuntime,
+  loadMintGltf,
+} from "./assets/gltf-runtime";
+import { siteConfig } from "./site-config";
 
 export type SceneMode = "browse" | "focusing" | "inspect" | "returning";
 export type VisualPlaybackMode =
@@ -91,6 +109,8 @@ type RuntimeRecord = {
   hover: number;
   targetHover: number;
   idleAmount: number;
+  activeSide: RecordSide;
+  activeDiscNumber: VinylDiscNumber;
   textures: THREE.Texture[];
 };
 
@@ -167,6 +187,17 @@ function disposeMaterial(material: THREE.Material) {
   material.dispose();
 }
 
+function disposeObject(root: THREE.Object3D) {
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.geometry?.dispose();
+    const materials = Array.isArray(object.material)
+      ? object.material
+      : [object.material];
+    materials.forEach((material) => material && disposeMaterial(material));
+  });
+}
+
 export class RecordShelfEngine {
   private canvas: HTMLCanvasElement;
   private recordsData: CatalogRecord[];
@@ -179,6 +210,11 @@ export class RecordShelfEngine {
   private shelfFurniture = new THREE.Group();
   private turntable = new THREE.Group();
   private turntableBase = new THREE.Group();
+  private turntableShell = new THREE.Group();
+  private importedTurntableShell: THREE.Object3D | null = null;
+  private turntableVariantId: TurntableVariantId =
+    defaultTurntableVariantId;
+  private turntableVariantRequestId = 0;
   private platter = new THREE.Group();
   private platterMat!: THREE.MeshPhysicalMaterial;
   private tonearmPivot = new THREE.Group();
@@ -297,8 +333,8 @@ export class RecordShelfEngine {
   }
 
   private setupScene() {
-    this.scene.background = new THREE.Color("#e7dfd1");
-    this.scene.fog = new THREE.Fog("#e7dfd1", 11, 25);
+    this.scene.background = new THREE.Color(siteConfig.theme.paper);
+    this.scene.fog = new THREE.Fog(siteConfig.theme.paper, 11, 25);
 
     const hemisphere = new THREE.HemisphereLight("#fff7e5", "#51443b", 2.2);
     this.scene.add(hemisphere);
@@ -328,7 +364,7 @@ export class RecordShelfEngine {
     const wall = new THREE.Mesh(
       new THREE.PlaneGeometry(34, 18),
       new THREE.MeshStandardMaterial({
-        color: "#e7dfd1",
+        color: siteConfig.theme.paper,
         roughness: 1,
       }),
     );
@@ -339,7 +375,7 @@ export class RecordShelfEngine {
     const ground = new THREE.Mesh(
       new THREE.PlaneGeometry(36, 20),
       new THREE.MeshStandardMaterial({
-        color: "#d8cbb7",
+        color: siteConfig.theme.paperDeep,
         roughness: 0.93,
       }),
     );
@@ -498,7 +534,13 @@ export class RecordShelfEngine {
       this.renderer,
       4,
     );
-    const labelTexture = toTexture(createLabelArt(record, "A"), this.renderer);
+    const initialTrack = record.tracks[0];
+    const initialSide = initialTrack?.side ?? "A";
+    const initialDiscNumber = initialTrack?.discNumber ?? 1;
+    const labelTexture = toTexture(
+      createLabelArt(record, initialSide),
+      this.renderer,
+    );
     const textures = [frontTexture, backTexture, spineTexture, labelTexture];
 
     const sleeveModel = createSleeveModel({
@@ -668,6 +710,8 @@ export class RecordShelfEngine {
       hover: 0,
       targetHover: 0,
       idleAmount: 0,
+      activeSide: initialSide,
+      activeDiscNumber: initialDiscNumber,
       textures,
     };
   }
@@ -676,6 +720,7 @@ export class RecordShelfEngine {
     const model = createTurntableModel();
     this.turntable = model.root;
     this.turntableBase = model.reveal;
+    this.turntableShell = model.shell;
     this.platter = model.platter;
     this.platterMat = model.platterMaterial;
     this.tonearmPivot = model.tonearmPivot;
@@ -687,6 +732,60 @@ export class RecordShelfEngine {
     this.scene.add(this.turntable);
   }
 
+  async setTurntableVariant(id: TurntableVariantId) {
+    const variant = getTurntableVariant(id);
+    const requestId = ++this.turntableVariantRequestId;
+
+    if (!variant.available) {
+      throw new Error(`${variant.label} is waiting for its synchronized asset.`);
+    }
+
+    if (variant.source === "builtin") {
+      if (this.importedTurntableShell) {
+        this.turntableBase.remove(this.importedTurntableShell);
+        disposeObject(this.importedTurntableShell);
+        this.importedTurntableShell = null;
+      }
+      this.turntableShell.visible = true;
+      this.turntableVariantId = variant.id;
+      return variant.id;
+    }
+
+    if (!variant.modelUrl || !variant.transform) {
+      throw new Error(`${variant.label} is missing its runtime asset contract.`);
+    }
+
+    const gltf = await loadMintGltf(variant.modelUrl);
+    const nextShell = gltf.scene;
+    if (this.isDisposed || requestId !== this.turntableVariantRequestId) {
+      disposeObject(nextShell);
+      return this.turntableVariantId;
+    }
+
+    nextShell.name = `turntableVariant:${variant.id}`;
+    nextShell.position.fromArray([...variant.transform.position]);
+    nextShell.rotation.fromArray([
+      ...variant.transform.rotation,
+      nextShell.rotation.order,
+    ]);
+    nextShell.scale.fromArray([...variant.transform.scale]);
+    nextShell.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+    });
+
+    if (this.importedTurntableShell) {
+      this.turntableBase.remove(this.importedTurntableShell);
+      disposeObject(this.importedTurntableShell);
+    }
+    this.importedTurntableShell = nextShell;
+    this.turntableBase.add(nextShell);
+    this.turntableShell.visible = false;
+    this.turntableVariantId = variant.id;
+    return variant.id;
+  }
+
   private bindEvents() {
     this.canvas.addEventListener("wheel", this.handleWheel, { passive: false });
     this.canvas.addEventListener("pointerdown", this.handlePointerDown);
@@ -694,8 +793,12 @@ export class RecordShelfEngine {
     this.canvas.addEventListener("pointerup", this.handlePointerUp);
     this.canvas.addEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.addEventListener("pointerleave", this.handlePointerLeave);
-    this.canvas.addEventListener("keydown", this.handleKeyDown);
+    // Keep browse keys available after someone has clicked one of the HTML
+    // controls around the canvas. The handler itself ignores form fields and
+    // modal dialogs, so their native keyboard behavior is preserved.
+    window.addEventListener("keydown", this.handleKeyDown);
     window.addEventListener("blur", this.handleWindowBlur);
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
   }
 
   private handleWheel = (event: WheelEvent) => {
@@ -716,6 +819,7 @@ export class RecordShelfEngine {
 
   private handlePointerDown = (event: PointerEvent) => {
     if (this.mode !== "browse") return;
+    this.canvas.focus({ preventScroll: true });
     this.pointerDown = true;
     this.pointerId = event.pointerId;
     this.pointerStartX = event.clientX;
@@ -751,12 +855,7 @@ export class RecordShelfEngine {
     const wasClick =
       this.pointerTravel < 7 &&
       Math.abs(event.clientX - this.pointerStartX) < 7;
-    this.pointerDown = false;
-    this.pointerId = null;
-    this.canvas.classList.remove("is-dragging");
-    if (this.canvas.hasPointerCapture(event.pointerId)) {
-      this.canvas.releasePointerCapture(event.pointerId);
-    }
+    this.clearPointerInteraction(event.pointerId);
     if (this.mode === "browse" && wasClick) {
       this.updatePointer(event);
       const hit = this.raycastRecord();
@@ -766,9 +865,7 @@ export class RecordShelfEngine {
 
   private handlePointerCancel = (event: PointerEvent) => {
     if (event.pointerId !== this.pointerId) return;
-    this.pointerDown = false;
-    this.pointerId = null;
-    this.canvas.classList.remove("is-dragging");
+    this.clearPointerInteraction(event.pointerId);
   };
 
   private handlePointerLeave = () => {
@@ -781,12 +878,40 @@ export class RecordShelfEngine {
   };
 
   private handleWindowBlur = () => {
+    this.clearPointerInteraction();
+  };
+
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === "hidden") this.clearPointerInteraction();
+  };
+
+  private clearPointerInteraction(pointerId = this.pointerId) {
     this.pointerDown = false;
     this.pointerId = null;
     this.canvas.classList.remove("is-dragging");
-  };
+    if (pointerId !== null && this.canvas.hasPointerCapture(pointerId)) {
+      this.canvas.releasePointerCapture(pointerId);
+    }
+  }
+
+  private isEditableKeyboardTarget(target: EventTarget | null) {
+    if (!(target instanceof Element)) return false;
+    return Boolean(
+      target.closest(
+        "input, textarea, select, [contenteditable='true'], [role='dialog']",
+      ),
+    );
+  }
+
+  private isNativeActivationTarget(target: EventTarget | null) {
+    if (!(target instanceof Element)) return false;
+    return Boolean(target.closest("button, a, [role='button'], [role='radio']"));
+  }
 
   private handleKeyDown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || this.isEditableKeyboardTarget(event.target)) {
+      return;
+    }
     if (event.key === "Escape") {
       this.requestReturnToShelf();
       return;
@@ -808,7 +933,10 @@ export class RecordShelfEngine {
     } else if (event.key === "End") {
       event.preventDefault();
       this.browseTo(this.runtimeRecords.length - 1);
-    } else if (event.key === "Enter" || event.key === " ") {
+    } else if (
+      (event.key === "Enter" || event.key === " ") &&
+      !this.isNativeActivationTarget(event.target)
+    ) {
       event.preventDefault();
       this.focusRecord(this.activeIndex);
     }
@@ -1078,7 +1206,7 @@ export class RecordShelfEngine {
           previousSleeveReveal > 0 &&
           this.sleeveRevealProgress <= 0
         ) {
-          this.callbacks.onStatus("Returning the closed sleeve to the archive");
+          this.callbacks.onStatus("Returning the closed sleeve to the shelf");
         }
       } else {
         this.focusProgress = clamp(
@@ -1106,7 +1234,13 @@ export class RecordShelfEngine {
         this.mode = "browse";
         this.turntable.visible = false;
         this.callbacks.onMode(this.mode, null);
-        this.callbacks.onStatus(`${this.recordsData.length} pressings ready`);
+        const pressingCount = this.recordsData.reduce(
+          (total, record) => total + record.discCount,
+          0,
+        );
+        this.callbacks.onStatus(
+          `${pressingCount} pressings across ${this.recordsData.length} releases ready`,
+        );
         this.canvas.focus({ preventScroll: true });
       }
     }
@@ -1192,19 +1326,52 @@ export class RecordShelfEngine {
     const selectedScale = selected.content.getWorldScale(
       new THREE.Vector3(),
     ).x;
+    const pocketZ =
+      sleeveWorld.z + sleeveOpeningContract.pocketDepthBias * selectedScale;
+    const sleeveMouthX =
+      sleeveWorld.x +
+      sleeveOpeningContract.directionX *
+        selected.width *
+        selectedScale *
+        0.5;
+    const vinylRadius =
+      selected.width * vinylSpec.discRadiusFactor * selectedScale;
+    const sleeveClearX =
+      sleeveMouthX +
+      sleeveOpeningContract.directionX *
+        (vinylRadius +
+          sleeveOpeningContract.trailingEdgeClearance * selectedScale);
     return {
       sleevedVinyl: {
         x: sleeveWorld.x + 0.12,
         y: sleeveWorld.y,
-        z: sleeveWorld.z - 0.015,
+        z: pocketZ,
         pitch: Math.PI / 2,
         yaw: 0,
         roll: 0,
-        scale: selected.content.getWorldScale(new THREE.Vector3()).x,
+        scale: selectedScale,
+      },
+      sleeveMouthVinyl: {
+        x: sleeveMouthX,
+        y: sleeveWorld.y,
+        z: pocketZ,
+        pitch: Math.PI / 2,
+        yaw: 0,
+        roll: 0,
+        scale: selectedScale,
+      },
+      sleeveClearVinyl: {
+        x: sleeveClearX,
+        y: sleeveWorld.y,
+        z: pocketZ,
+        pitch: Math.PI / 2,
+        yaw: 0,
+        roll: 0,
+        scale: selectedScale,
       },
       extractedVinyl: {
-        x: sleeveWorld.x + (this.isMobile() ? 0.78 : 1.18),
-        y: sleeveWorld.y + 0.02,
+        x: sleeveClearX + 0.08 * selectedScale,
+        y: sleeveWorld.y + 0.04,
         z: sleeveWorld.z + 0.22,
         pitch: Math.PI / 2,
         yaw: -0.08,
@@ -1448,8 +1615,7 @@ export class RecordShelfEngine {
   private updateVinylAnchor() {
     if (
       this.selectedIndex === null ||
-      this.mode !== "inspect" ||
-      this.cuePhase !== null
+      this.mode !== "inspect"
     ) {
       this.callbacks.onVinylAnchor?.(null);
       return;
@@ -1601,6 +1767,7 @@ export class RecordShelfEngine {
     this.canvas.dataset.cuePhase = diagnostics.cuePhase ?? "idle";
     this.canvas.dataset.sceneMode = diagnostics.sceneMode;
     this.canvas.dataset.playbackMode = diagnostics.playbackMode;
+    this.canvas.dataset.turntableVariant = diagnostics.turntableVariantId;
     this.canvas.dataset.collisionFree = String(
       diagnostics.currentCollision === null,
     );
@@ -1719,6 +1886,41 @@ export class RecordShelfEngine {
     }
   }
 
+  selectTrack(track: RecordTrack) {
+    if (this.selectedIndex === null) return false;
+    const runtime = this.runtimeRecords[this.selectedIndex];
+    const selectedTrack = runtime.data.tracks.find(
+      (candidate) => candidate.id === track.id,
+    );
+    if (!selectedTrack) return false;
+
+    const nextSide = selectedTrack.side ?? "A";
+    const nextDiscNumber = selectedTrack.discNumber ?? 1;
+    const presentationChanged =
+      runtime.activeSide !== nextSide ||
+      runtime.activeDiscNumber !== nextDiscNumber;
+    runtime.activeSide = nextSide;
+    runtime.activeDiscNumber = nextDiscNumber;
+
+    if (!presentationChanged || runtime.data.labelImage) return true;
+
+    const texture = toTexture(
+      createLabelArt(runtime.data, nextSide),
+      this.renderer,
+    );
+    texture.name = `label:${runtime.data.id}:disc-${nextDiscNumber}:side-${nextSide}`;
+    const previous = runtime.vinylLabel.material.map;
+    runtime.vinylLabel.material.map = texture;
+    runtime.vinylLabel.material.needsUpdate = true;
+    const previousIndex = previous
+      ? runtime.textures.indexOf(previous)
+      : -1;
+    if (previousIndex >= 0) runtime.textures.splice(previousIndex, 1, texture);
+    else runtime.textures.push(texture);
+    previous?.dispose();
+    return true;
+  }
+
   setPlaybackProgress(progress: number) {
     this.grooveProgress = clamp(progress, 0, 1);
   }
@@ -1761,7 +1963,7 @@ export class RecordShelfEngine {
     this.callbacks.onStatus(
       this.sleeveRevealProgress > 0
         ? "Sliding the pressing into its sleeve"
-        : "Returning the album to the archive",
+        : "Returning the album to the shelf",
     );
   }
 
@@ -1783,6 +1985,14 @@ export class RecordShelfEngine {
       playbackMode: this.playbackMode,
       activeIndex: this.activeIndex,
       selectedIndex: this.selectedIndex,
+      activeDiscNumber:
+        this.selectedIndex === null
+          ? null
+          : this.runtimeRecords[this.selectedIndex].activeDiscNumber,
+      activeSide:
+        this.selectedIndex === null
+          ? null
+          : this.runtimeRecords[this.selectedIndex].activeSide,
       records: this.runtimeRecords.length,
       drawCalls: info.render.calls,
       triangles: info.render.triangles,
@@ -1808,11 +2018,13 @@ export class RecordShelfEngine {
         clientWidth: this.canvas.clientWidth,
         clientHeight: this.canvas.clientHeight,
       },
+      turntableVariantId: this.turntableVariantId,
     };
   }
 
   dispose() {
     this.isDisposed = true;
+    this.turntableVariantRequestId += 1;
     cancelAnimationFrame(this.animationFrame);
     this.resizeObserver.disconnect();
     this.controls.dispose();
@@ -1822,8 +2034,12 @@ export class RecordShelfEngine {
     this.canvas.removeEventListener("pointerup", this.handlePointerUp);
     this.canvas.removeEventListener("pointercancel", this.handlePointerCancel);
     this.canvas.removeEventListener("pointerleave", this.handlePointerLeave);
-    this.canvas.removeEventListener("keydown", this.handleKeyDown);
+    window.removeEventListener("keydown", this.handleKeyDown);
     window.removeEventListener("blur", this.handleWindowBlur);
+    document.removeEventListener(
+      "visibilitychange",
+      this.handleVisibilityChange,
+    );
 
     this.scene.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
@@ -1836,6 +2052,7 @@ export class RecordShelfEngine {
     this.runtimeRecords.forEach((record) => {
       record.textures.forEach((texture) => texture.dispose());
     });
+    disposeMintGltfRuntime();
     this.renderer.dispose();
   }
 }

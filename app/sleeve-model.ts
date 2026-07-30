@@ -21,6 +21,17 @@ export type SleeveModel = {
 };
 
 /**
+ * Local-space contract for the open right edge of every generated sleeve.
+ * Cue choreography uses these values to keep a pressing inside the pocket
+ * depth until its trailing edge has physically cleared the mouth.
+ */
+export const sleeveOpeningContract = {
+  directionX: 1,
+  pocketDepthBias: -0.015,
+  trailingEdgeClearance: 0.045,
+} as const;
+
+/**
  * Builds a thin, open-sided cardstock pocket. The layered seams and mouth are
  * deliberately separate from the cover artwork so the jacket still reads as a
  * physical sleeve when custom flat artwork is supplied.
