@@ -49,6 +49,7 @@ import {
   turntableVariants,
   type TurntableVariantId,
 } from "./turntable-variants";
+import { shouldResumeTrackTransition } from "./track-transition";
 
 function ArrowIcon({ direction }: { direction: "left" | "right" }) {
   return (
@@ -95,6 +96,11 @@ type PendingTrack = {
   track: RecordTrack;
   autoplay: boolean;
 } | null;
+
+type LoadTrackOptions = {
+  syncPresentation?: boolean;
+  fadeCurrent?: boolean;
+};
 
 type LibraryCommands = {
   browse: (index: number) => void;
@@ -149,6 +155,7 @@ export function VinylLibrary() {
   const audioRef = useRef<VinylAudioController | null>(null);
   const playbackRef = useRef<PlaybackState>(initialPlaybackState());
   const pendingTrackRef = useRef<PendingTrack>(null);
+  const queuedTrackTransitionRef = useRef<PendingTrack>(null);
   const pendingFocusRef = useRef<number | null>(null);
   const turntableVariantRef = useRef<TurntableVariantId>(
     defaultTurntableVariantId,
@@ -312,18 +319,25 @@ export function VinylLibrary() {
   }, []);
 
   const loadTrack = useCallback(
-    async (track: RecordTrack, autoplay: boolean) => {
+    async (
+      track: RecordTrack,
+      autoplay: boolean,
+      options: LoadTrackOptions = {},
+    ) => {
       const audio = audioRef.current;
       if (!audio) return;
       setSelectedTrackId(track.id);
-      engineRef.current?.selectTrack(track);
+      if (options.syncPresentation !== false) {
+        engineRef.current?.selectTrack(track);
+      }
       if (!track.previewUrl) {
-        void audio.stop(80).catch(() => undefined);
+        void audio.stop(options.fadeCurrent ? 120 : 80).catch(() => undefined);
         dispatchPlayback({
           type: "SELECT_CATALOG_TRACK",
           trackId: track.id,
           duration: track.duration,
         });
+        engineRef.current?.continueTrackTransition();
         setStatus("Track selected · use the official listening links");
         return;
       }
@@ -336,6 +350,9 @@ export function VinylLibrary() {
       });
       setStatus(`Loading ${track.title}`);
       try {
+        if (options.fadeCurrent) {
+          await audio.stop(120).catch(() => undefined);
+        }
         await audio.load(track.previewUrl, {
           requestId: loading.requestId,
         });
@@ -366,7 +383,35 @@ export function VinylLibrary() {
 
   const queueTrack = useCallback(
     (track: RecordTrack, autoplay: boolean) => {
-      const cuePhase = engineRef.current?.getDiagnostics().cuePhase;
+      const engine = engineRef.current;
+      const state = playbackRef.current;
+      const diagnostics = engine?.getDiagnostics();
+      const cuePhase = diagnostics?.cuePhase;
+      if (state.trackId === track.id) {
+        setSelectedTrackId(track.id);
+        return;
+      }
+      if (diagnostics?.trackTransitionPhase) {
+        queuedTrackTransitionRef.current = {
+          track,
+          autoplay: true,
+        };
+        setSelectedTrackId(track.id);
+        setStatus(`${track.title} queued next`);
+        return;
+      }
+      if (cuePhase === "playing") {
+        const transition = engine?.startTrackTransition(track);
+        if (transition) {
+          const resumePlayback = shouldResumeTrackTransition(state, autoplay);
+          void audioRef.current?.unlock().catch(() => undefined);
+          void loadTrack(track, resumePlayback, {
+            syncPresentation: false,
+            fadeCurrent: true,
+          });
+          return;
+        }
+      }
       if (cuePhase !== null && cuePhase !== undefined) {
         pendingTrackRef.current = { track, autoplay };
         stopPlayback(false);
@@ -402,7 +447,16 @@ export function VinylLibrary() {
       if (state.mode === "playing" || state.mode === "cueing") return;
       if (state.mode === "error") {
         dispatchPlayback({ type: "CLEAR_ERROR" });
-        queueTrack(track, true);
+        if (engine.getDiagnostics().trackTransitionPhase) {
+          void loadTrack(track, true, {
+            syncPresentation: false,
+          });
+        } else {
+          const retryTransition = engine.startTrackTransition(track);
+          void loadTrack(track, true, {
+            syncPresentation: retryTransition === null,
+          });
+        }
         return;
       }
 
@@ -423,6 +477,7 @@ export function VinylLibrary() {
     },
     [
       dispatchPlayback,
+      loadTrack,
       queueTrack,
       sceneMode,
       selectedTrack,
@@ -462,6 +517,7 @@ export function VinylLibrary() {
 
   const returnToShelf = useCallback(() => {
     pendingTrackRef.current = null;
+    queuedTrackTransitionRef.current = null;
     stopPlayback(true);
   }, [stopPlayback]);
 
@@ -478,6 +534,7 @@ export function VinylLibrary() {
       setActiveIndex(0);
       setSelectedIndex(null);
       setSelectedTrackId(null);
+      queuedTrackTransitionRef.current = null;
       setSceneMode("browse");
       const resetPlayback = initialPlaybackState(playbackRef.current.volume);
       playbackRef.current = resetPlayback;
@@ -494,6 +551,14 @@ export function VinylLibrary() {
               requestId: snapshot.requestId,
               duration: snapshot.duration,
             });
+            if (engineRef.current?.continueTrackTransition()) {
+              setStatus(
+                next.mode === "cueing"
+                  ? "Track ready · finishing the cue"
+                  : "Track ready · needle raised",
+              );
+              return;
+            }
             if (next.mode === "cueing") {
               const started = engineRef.current?.startCue(
                 snapshot.duration > 0
@@ -564,7 +629,13 @@ export function VinylLibrary() {
               message: error.message,
             });
             setStatus(error.message);
-            engineRef.current?.stopAndReturnVinyl();
+            const engine = engineRef.current;
+            if (
+              !engine?.failTrackTransition() &&
+              !engine?.holdNeedleAfterPlaybackError()
+            ) {
+              engine?.stopAndReturnVinyl();
+            }
           },
         },
       });
@@ -606,6 +677,13 @@ export function VinylLibrary() {
             requestId: current.requestId,
           });
           void audioRef.current?.play().catch(() => undefined);
+          const queued = queuedTrackTransitionRef.current;
+          queuedTrackTransitionRef.current = null;
+          if (queued) {
+            queueMicrotask(() =>
+              commandsRef.current.play(queued.track.id),
+            );
+          }
         },
         onVinylReturned: () => {
           dispatchPlayback({
@@ -752,6 +830,7 @@ export function VinylLibrary() {
     if (!approved) return;
     setStatus(`Removing ${selectedRecord.shortTitle}`);
     pendingTrackRef.current = null;
+    queuedTrackTransitionRef.current = null;
     await audioRef.current?.stop(80).catch(() => undefined);
     await removeLocalRecord(selectedRecord.id);
     await refreshLocalLibrary();

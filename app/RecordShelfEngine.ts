@@ -18,6 +18,7 @@ import {
   recordShelfGap,
   recordFootprintsOverlap,
   shelvedRecordPose,
+  trackTransitionMotionPose,
   type BrowseMotionPhase,
   type CueMotionLayout,
   type CueMotionPhase,
@@ -25,6 +26,7 @@ import {
   type RecordFootprint,
   type RecordMotionLayout,
   type RecordPose,
+  type TrackTransitionMotionPhase,
 } from "./record-motion";
 import {
   createBackCover,
@@ -58,6 +60,11 @@ import {
   loadMintGltf,
 } from "./assets/gltf-runtime";
 import { siteConfig } from "./site-config";
+import {
+  classifyTrackTransition,
+  trackGrooveProgress,
+  type TrackTransitionKind,
+} from "./track-transition";
 
 export type SceneMode = "browse" | "focusing" | "inspect" | "returning";
 export type VisualPlaybackMode =
@@ -111,7 +118,19 @@ type RuntimeRecord = {
   idleAmount: number;
   activeSide: RecordSide;
   activeDiscNumber: VinylDiscNumber;
+  activeTrackId: string | null;
   textures: THREE.Texture[];
+};
+
+type ActiveTrackTransition = {
+  kind: TrackTransitionKind;
+  phase: TrackTransitionMotionPhase;
+  progress: number;
+  fromGrooveProgress: number;
+  toGrooveProgress: number;
+  targetTrack: RecordTrack;
+  trackReady: boolean;
+  presentationCommitted: boolean;
 };
 
 export type VinylLibraryDiagnostics = ReturnType<
@@ -139,6 +158,14 @@ const cueDurations: Record<Exclude<CueMotionPhase, "playing">, number> = {
   "raise-tonearm": 0.56,
   "return-to-sleeve": 0.78,
   "reinsert-vinyl": 0.5,
+};
+const trackTransitionDurations: Record<
+  Exclude<TrackTransitionMotionPhase, "waiting">,
+  number
+> = {
+  "lift-tonearm": 0.42,
+  "change-vinyl": 0.84,
+  "lower-tonearm": 0.48,
 };
 
 function damp(current: number, target: number, lambda: number, delta: number) {
@@ -268,6 +295,7 @@ export class RecordShelfEngine {
   private cueContactFired = false;
   private vinylReturnFired = false;
   private returnAfterVinyl = false;
+  private trackTransition: ActiveTrackTransition | null = null;
   private analyserReader: ((target: Uint8Array) => boolean) | null = null;
   private analyserData = new Uint8Array(512);
   private audioBandLayout: AudioBandLayout = createLogBandLayout({
@@ -712,6 +740,7 @@ export class RecordShelfEngine {
       idleAmount: 0,
       activeSide: initialSide,
       activeDiscNumber: initialDiscNumber,
+      activeTrackId: initialTrack?.id ?? null,
       textures,
     };
   }
@@ -1409,6 +1438,11 @@ export class RecordShelfEngine {
     if (!layout || this.selectedIndex === null) return;
     const selected = this.runtimeRecords[this.selectedIndex];
 
+    if (this.trackTransition) {
+      this.updateTrackTransition(selected, layout, delta);
+      return;
+    }
+
     if (this.cuePhase === null) {
       selected.vinyl.visible =
         this.mode !== "browse" && this.sleeveRevealProgress > 0;
@@ -1428,7 +1462,12 @@ export class RecordShelfEngine {
     let pose: CueMotionPose;
     if (this.cuePhase === "playing") {
       pose = cueMotionPose("playing", this.grooveProgress, layout);
-      if (this.playbackMode === "paused") {
+      if (
+        this.playbackMode === "paused" ||
+        this.playbackMode === "idle" ||
+        this.playbackMode === "loading" ||
+        this.playbackMode === "error"
+      ) {
         pose = {
           ...pose,
           tonearm: { ...pose.tonearm, lift: 0.038 },
@@ -1504,6 +1543,128 @@ export class RecordShelfEngine {
         }
         break;
     }
+  }
+
+  private updateTrackTransition(
+    selected: RuntimeRecord,
+    layout: CueMotionLayout,
+    delta: number,
+  ) {
+    const transition = this.trackTransition;
+    if (!transition) return;
+
+    selected.vinyl.visible = true;
+    if (transition.phase === "waiting") {
+      this.applyCuePose(
+        selected,
+        trackTransitionMotionPose(
+          transition.kind,
+          "waiting",
+          1,
+          layout,
+          transition.fromGrooveProgress,
+          transition.toGrooveProgress,
+        ),
+        delta,
+      );
+      if (!transition.trackReady) return;
+      if (this.playbackMode === "cueing") {
+        transition.phase = "lower-tonearm";
+        transition.progress = 0;
+      } else {
+        this.completeTrackTransition(false);
+      }
+      return;
+    }
+
+    const duration = this.reducedMotion
+      ? 0.09
+      : trackTransitionDurations[transition.phase];
+    transition.progress = clamp(transition.progress + delta / duration, 0, 1);
+    if (
+      transition.phase === "change-vinyl" &&
+      transition.progress >= 0.5 &&
+      !transition.presentationCommitted
+    ) {
+      this.commitTrackPresentation(selected, transition.targetTrack);
+      transition.presentationCommitted = true;
+    }
+    this.applyCuePose(
+      selected,
+      trackTransitionMotionPose(
+        transition.kind,
+        transition.phase,
+        transition.progress,
+        layout,
+        transition.fromGrooveProgress,
+        transition.toGrooveProgress,
+      ),
+      delta,
+    );
+    if (transition.progress < 1) return;
+
+    if (transition.phase === "lift-tonearm") {
+      transition.progress = 0;
+      if (transition.kind === "same-side") {
+        this.finishPhysicalTrackChange();
+      } else {
+        transition.phase = "change-vinyl";
+        this.callbacks.onStatus(
+          transition.kind === "flip-side"
+            ? `Flipping to side ${transition.targetTrack.side ?? "A"}`
+            : `Changing to LP ${transition.targetTrack.discNumber ?? 1}`,
+        );
+      }
+      return;
+    }
+
+    if (transition.phase === "change-vinyl") {
+      if (!transition.presentationCommitted) {
+        this.commitTrackPresentation(selected, transition.targetTrack);
+        transition.presentationCommitted = true;
+      }
+      transition.progress = 0;
+      this.finishPhysicalTrackChange();
+      return;
+    }
+
+    this.completeTrackTransition(true);
+  }
+
+  private finishPhysicalTrackChange() {
+    const transition = this.trackTransition;
+    if (!transition) return;
+    if (!transition.trackReady) {
+      transition.phase = "waiting";
+      transition.progress = 0;
+      if (this.playbackMode !== "error") {
+        this.callbacks.onStatus("Track readying · needle held above the groove");
+      }
+      return;
+    }
+    if (this.playbackMode !== "cueing") {
+      this.completeTrackTransition(false);
+      return;
+    }
+    transition.phase = "lower-tonearm";
+    transition.progress = 0;
+    this.callbacks.onStatus(`Cueing ${transition.targetTrack.title}`);
+  }
+
+  private completeTrackTransition(needleContact: boolean) {
+    const transition = this.trackTransition;
+    if (!transition || this.selectedIndex === null) return;
+    const selected = this.runtimeRecords[this.selectedIndex];
+    if (!transition.presentationCommitted) {
+      this.commitTrackPresentation(selected, transition.targetTrack);
+    }
+    this.grooveProgress = transition.toGrooveProgress;
+    this.trackTransition = null;
+    this.cuePhase = "playing";
+    this.cueProgress = 0;
+    this.cueContactFired = needleContact;
+    this.controls.enabled = this.mode === "inspect";
+    if (needleContact) this.callbacks.onNeedleContact();
   }
 
   private applyCuePose(
@@ -1765,6 +1926,8 @@ export class RecordShelfEngine {
     this.canvas.dataset.pixelRatio = String(diagnostics.pixelRatio);
     this.canvas.dataset.motionPhase = diagnostics.motionPhase;
     this.canvas.dataset.cuePhase = diagnostics.cuePhase ?? "idle";
+    this.canvas.dataset.trackTransition =
+      diagnostics.trackTransitionPhase ?? "idle";
     this.canvas.dataset.sceneMode = diagnostics.sceneMode;
     this.canvas.dataset.playbackMode = diagnostics.playbackMode;
     this.canvas.dataset.turntableVariant = diagnostics.turntableVariantId;
@@ -1829,7 +1992,7 @@ export class RecordShelfEngine {
     }
   }
 
-  startCue(grooveProgress = 0) {
+  startCue(trackProgress = 0) {
     if (
       this.mode !== "inspect" ||
       this.selectedIndex === null ||
@@ -1842,7 +2005,13 @@ export class RecordShelfEngine {
     this.cuePhase = "extract-vinyl";
     this.cueProgress = idleVinylReveal;
     this.sleeveRevealProgress = 1;
-    this.grooveProgress = clamp(grooveProgress, 0, 1);
+    const runtime = this.runtimeRecords[this.selectedIndex];
+    const activeTrack = runtime.data.tracks.find(
+      (track) => track.id === runtime.activeTrackId,
+    );
+    this.grooveProgress = activeTrack
+      ? trackGrooveProgress(activeTrack, runtime.data.tracks, trackProgress)
+      : clamp(trackProgress, 0, 1);
     this.cueContactFired = false;
     this.vinylReturnFired = false;
     this.playbackMode = "cueing";
@@ -1852,6 +2021,9 @@ export class RecordShelfEngine {
 
   stopAndReturnVinyl(returnToShelf = false) {
     this.returnAfterVinyl ||= returnToShelf;
+    if (this.trackTransition) {
+      this.completeTrackTransition(false);
+    }
     if (this.cuePhase === null) {
       if (returnToShelf) this.beginReturnToShelf();
       else if (!this.vinylReturnFired) {
@@ -1886,14 +2058,78 @@ export class RecordShelfEngine {
     }
   }
 
-  selectTrack(track: RecordTrack) {
-    if (this.selectedIndex === null) return false;
+  startTrackTransition(track: RecordTrack): TrackTransitionKind | null {
+    if (
+      this.mode !== "inspect" ||
+      this.selectedIndex === null ||
+      this.cuePhase !== "playing" ||
+      this.trackTransition !== null
+    ) {
+      return null;
+    }
     const runtime = this.runtimeRecords[this.selectedIndex];
-    const selectedTrack = runtime.data.tracks.find(
+    const targetTrack = runtime.data.tracks.find(
       (candidate) => candidate.id === track.id,
     );
-    if (!selectedTrack) return false;
+    if (!targetTrack) return null;
 
+    const kind = classifyTrackTransition(
+      {
+        side: runtime.activeSide,
+        discNumber: runtime.activeDiscNumber,
+      },
+      targetTrack,
+    );
+    this.trackTransition = {
+      kind,
+      phase: "lift-tonearm",
+      progress: 0,
+      fromGrooveProgress: this.grooveProgress,
+      toGrooveProgress: trackGrooveProgress(targetTrack, runtime.data.tracks),
+      targetTrack,
+      trackReady: false,
+      presentationCommitted: false,
+    };
+    this.controls.enabled = false;
+    this.cueContactFired = false;
+    this.playbackMode = "cueing";
+    this.callbacks.onStatus(
+      kind === "same-side"
+        ? `Lifting the needle for ${targetTrack.title}`
+        : kind === "flip-side"
+          ? `Preparing side ${targetTrack.side ?? "A"}`
+          : `Preparing LP ${targetTrack.discNumber ?? 1}`,
+    );
+    return kind;
+  }
+
+  continueTrackTransition() {
+    if (!this.trackTransition) return false;
+    this.trackTransition.trackReady = true;
+    return true;
+  }
+
+  failTrackTransition() {
+    if (!this.trackTransition) return false;
+    this.trackTransition.trackReady = false;
+    if (this.trackTransition.phase === "lower-tonearm") {
+      this.trackTransition.phase = "waiting";
+      this.trackTransition.progress = 0;
+    }
+    return true;
+  }
+
+  holdNeedleAfterPlaybackError() {
+    if (this.cuePhase !== "playing") return false;
+    this.playbackMode = "error";
+    this.controls.enabled = this.mode === "inspect";
+    return true;
+  }
+
+  private commitTrackPresentation(
+    runtime: RuntimeRecord,
+    selectedTrack: RecordTrack,
+  ) {
     const nextSide = selectedTrack.side ?? "A";
     const nextDiscNumber = selectedTrack.discNumber ?? 1;
     const presentationChanged =
@@ -1901,8 +2137,9 @@ export class RecordShelfEngine {
       runtime.activeDiscNumber !== nextDiscNumber;
     runtime.activeSide = nextSide;
     runtime.activeDiscNumber = nextDiscNumber;
+    runtime.activeTrackId = selectedTrack.id;
 
-    if (!presentationChanged || runtime.data.labelImage) return true;
+    if (!presentationChanged || runtime.data.labelImage) return;
 
     const texture = toTexture(
       createLabelArt(runtime.data, nextSide),
@@ -1918,11 +2155,32 @@ export class RecordShelfEngine {
     if (previousIndex >= 0) runtime.textures.splice(previousIndex, 1, texture);
     else runtime.textures.push(texture);
     previous?.dispose();
+  }
+
+  selectTrack(track: RecordTrack) {
+    if (this.selectedIndex === null) return false;
+    const runtime = this.runtimeRecords[this.selectedIndex];
+    const selectedTrack = runtime.data.tracks.find(
+      (candidate) => candidate.id === track.id,
+    );
+    if (!selectedTrack) return false;
+
+    this.commitTrackPresentation(runtime, selectedTrack);
     return true;
   }
 
   setPlaybackProgress(progress: number) {
-    this.grooveProgress = clamp(progress, 0, 1);
+    if (this.selectedIndex === null) {
+      this.grooveProgress = clamp(progress, 0, 1);
+      return;
+    }
+    const runtime = this.runtimeRecords[this.selectedIndex];
+    const activeTrack = runtime.data.tracks.find(
+      (track) => track.id === runtime.activeTrackId,
+    );
+    this.grooveProgress = activeTrack
+      ? trackGrooveProgress(activeTrack, runtime.data.tracks, progress)
+      : clamp(progress, 0, 1);
   }
 
   setAnalyserReader(
@@ -2002,6 +2260,8 @@ export class RecordShelfEngine {
       motionPhase: this.browseMotionPhase,
       cuePhase: this.cuePhase,
       cueProgress: this.cueProgress,
+      trackTransitionKind: this.trackTransition?.kind ?? null,
+      trackTransitionPhase: this.trackTransition?.phase ?? null,
       sleeveRevealProgress: this.sleeveRevealProgress,
       collisionRejects: this.collisionRejects,
       lastCollisionPair: this.lastCollisionPair,

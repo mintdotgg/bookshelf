@@ -318,6 +318,17 @@ export type CueMotionPhase =
   | "return-to-sleeve"
   | "reinsert-vinyl";
 
+export type TrackTransitionMotionPhase =
+  | "lift-tonearm"
+  | "change-vinyl"
+  | "waiting"
+  | "lower-tonearm";
+
+export type TrackTransitionMotionKind =
+  | "same-side"
+  | "flip-side"
+  | "swap-disc";
+
 export type CueMotionPose = {
   vinyl: VinylPose;
   tonearm: TonearmPose;
@@ -443,6 +454,97 @@ function restingTonearm(layout: CueMotionLayout): TonearmPose {
 function cueContact(progress: number) {
   const positioningEnd = 0.62;
   return smooth((clamp01(progress) - positioningEnd) / (1 - positioningEnd));
+}
+
+export function trackTransitionMotionPose(
+  kind: TrackTransitionMotionKind,
+  phase: TrackTransitionMotionPhase,
+  progress: number,
+  layout: CueMotionLayout,
+  fromGrooveProgress: number,
+  toGrooveProgress: number,
+): CueMotionPose {
+  const value = clamp01(progress);
+  const fromYaw = grooveYaw(fromGrooveProgress, layout);
+  const toYaw = grooveYaw(toGrooveProgress, layout);
+  const raisedTarget =
+    kind === "same-side" ? toYaw : layout.tonearmRestYaw;
+  const vinyl = { ...layout.platterVinyl };
+
+  if (phase === "lift-tonearm") {
+    const liftEnd = 0.46;
+    const lifting = smooth(value / liftEnd);
+    const moving = smooth((value - liftEnd) / (1 - liftEnd));
+    return {
+      vinyl,
+      tonearm: {
+        yaw: lerp(fromYaw, raisedTarget, moving),
+        lift: lerp(
+          layout.tonearmContactLift,
+          layout.tonearmRaisedLift,
+          lifting,
+        ),
+      },
+      platterSpeed: kind === "same-side" ? 1 : 1 - smooth(value),
+      stylusContact: 1 - lifting,
+    };
+  }
+
+  if (phase === "change-vinyl") {
+    const liftArc = Math.sin(value * Math.PI);
+    if (kind === "flip-side") {
+      vinyl.y += liftArc * 0.54;
+      vinyl.roll += Math.PI * smooth(value);
+    } else if (kind === "swap-disc") {
+      const halfProgress =
+        value < 0.5 ? smooth(value * 2) : smooth((value - 0.5) * 2);
+      vinyl.x +=
+        value < 0.5
+          ? halfProgress * 0.72
+          : -(1 - halfProgress) * 0.72;
+      vinyl.y += liftArc * 0.42;
+      vinyl.scale *=
+        value < 0.5
+          ? lerp(1, 0.04, halfProgress)
+          : lerp(0.04, 1, halfProgress);
+    }
+    return {
+      vinyl,
+      tonearm: {
+        yaw: layout.tonearmRestYaw,
+        lift: layout.tonearmRaisedLift,
+      },
+      platterSpeed: 0,
+      stylusContact: 0,
+    };
+  }
+
+  if (phase === "waiting") {
+    return {
+      vinyl,
+      tonearm: {
+        yaw: toYaw,
+        lift: layout.tonearmRaisedLift,
+      },
+      platterSpeed: 1,
+      stylusContact: 0,
+    };
+  }
+
+  const lowering = smooth(value);
+  return {
+    vinyl,
+    tonearm: {
+      yaw: toYaw,
+      lift: lerp(
+        layout.tonearmRaisedLift,
+        layout.tonearmContactLift,
+        lowering,
+      ),
+    },
+    platterSpeed: 1,
+    stylusContact: lowering,
+  };
 }
 
 /**

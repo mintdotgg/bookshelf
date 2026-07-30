@@ -1119,6 +1119,171 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
   );
 });
 
+test("track changes classify physical motion and preserve playback intent", async () => {
+  const {
+    classifyTrackTransition,
+    shouldResumeTrackTransition,
+    trackGrooveProgress,
+  } = await import("../app/track-transition.ts");
+  const { recordCatalog } = await import("../app/record-catalog.ts");
+  const lany = recordCatalog.find((record) => record.id === "lany");
+  assert.ok(lany);
+  const [a1, a2, , , b1, , , , c1] = lany.tracks;
+
+  assert.equal(classifyTrackTransition(a1, a2), "same-side");
+  assert.equal(classifyTrackTransition(a2, b1), "flip-side");
+  assert.equal(classifyTrackTransition(b1, c1), "swap-disc");
+  assert.equal(
+    shouldResumeTrackTransition({
+      mode: "playing",
+      resumeAfterSeek: "playing",
+    }),
+    true,
+  );
+  assert.equal(
+    shouldResumeTrackTransition({
+      mode: "paused",
+      resumeAfterSeek: "paused",
+    }),
+    false,
+  );
+  assert.equal(
+    shouldResumeTrackTransition(
+      {
+        mode: "paused",
+        resumeAfterSeek: "paused",
+      },
+      true,
+    ),
+    true,
+  );
+
+  const a1Start = trackGrooveProgress(a1, lany.tracks);
+  const a1End = trackGrooveProgress(a1, lany.tracks, 1);
+  const a2Start = trackGrooveProgress(a2, lany.tracks);
+  assert.ok(a1Start < a1End);
+  assert.ok(a1End <= a2Start);
+  assert.ok(trackGrooveProgress(b1, lany.tracks) < 0.1);
+  assert.ok(trackGrooveProgress(c1, lany.tracks) < 0.1);
+});
+
+test("same-side recues, side flips, and disc swaps have deterministic poses", async () => {
+  const { trackTransitionMotionPose } = await import(
+    "../app/record-motion.ts"
+  );
+  const layout = {
+    sleevedVinyl: {
+      x: -1.2,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    sleeveMouthVinyl: {
+      x: -0.5,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    sleeveClearVinyl: {
+      x: 0,
+      y: 1.4,
+      z: 1.5,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    extractedVinyl: {
+      x: 0.2,
+      y: 1.5,
+      z: 1.7,
+      pitch: Math.PI / 2,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    turntableApproachVinyl: {
+      x: 1.4,
+      y: 1.8,
+      z: 0.62,
+      pitch: 0.18,
+      yaw: 0.08,
+      roll: 0,
+      scale: 1,
+    },
+    platterVinyl: {
+      x: 1.4,
+      y: 0.72,
+      z: 0.54,
+      pitch: 0,
+      yaw: 0,
+      roll: 0,
+      scale: 1,
+    },
+    tonearmRestYaw: -0.34,
+    tonearmLeadInYaw: 0.13,
+    tonearmRunoutYaw: 0.49,
+    tonearmRaisedLift: 0.12,
+    tonearmContactLift: 0,
+  };
+  const fromGroove = 0.2;
+  const toGroove = 0.7;
+
+  const sameSideLift = trackTransitionMotionPose(
+    "same-side",
+    "lift-tonearm",
+    1,
+    layout,
+    fromGroove,
+    toGroove,
+  );
+  assert.deepEqual(sameSideLift.vinyl, layout.platterVinyl);
+  assert.equal(sameSideLift.platterSpeed, 1);
+  assert.equal(sameSideLift.tonearm.lift, layout.tonearmRaisedLift);
+  assert.equal(sameSideLift.stylusContact, 0);
+
+  const lowered = trackTransitionMotionPose(
+    "same-side",
+    "lower-tonearm",
+    1,
+    layout,
+    fromGroove,
+    toGroove,
+  );
+  assert.equal(lowered.tonearm.lift, layout.tonearmContactLift);
+  assert.equal(lowered.platterSpeed, 1);
+  assert.equal(lowered.stylusContact, 1);
+
+  const halfFlip = trackTransitionMotionPose(
+    "flip-side",
+    "change-vinyl",
+    0.5,
+    layout,
+    fromGroove,
+    toGroove,
+  );
+  assert.ok(halfFlip.vinyl.y > layout.platterVinyl.y);
+  assert.ok(Math.abs(halfFlip.vinyl.roll - Math.PI / 2) < 1e-12);
+  assert.equal(halfFlip.platterSpeed, 0);
+
+  const halfSwap = trackTransitionMotionPose(
+    "swap-disc",
+    "change-vinyl",
+    0.5,
+    layout,
+    fromGroove,
+    toGroove,
+  );
+  assert.ok(halfSwap.vinyl.scale < layout.platterVinyl.scale * 0.1);
+  assert.ok(halfSwap.vinyl.y > layout.platterVinyl.y);
+});
+
 test("browse presentation and inspection settle to exact face-on sleeve poses", async () => {
   const {
     createRecordMotionLayout,
