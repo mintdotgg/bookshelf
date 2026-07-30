@@ -23,7 +23,8 @@ SPOTIFY_CLIENT_ID=your_client_id
 SPOTIFY_CLIENT_SECRET=your_client_secret
 ```
 
-To enable the optional YouTube download button, install `yt-dlp` and FFmpeg.
+To enable automatic audio during import and the manual download tools, install
+`yt-dlp` and FFmpeg.
 On macOS with Homebrew:
 
 ```bash
@@ -59,11 +60,17 @@ An immediate YouTube HTTP 403 is retried once over IPv4. A repeated 403 is
 reported as a PO-token, authorized-cookie, or network problem instead of being
 retried indefinitely. The app never reads browser cookies automatically.
 
-Then start both the loopback helper and the existing application:
+The default development command starts the loopback helper, waits for it to
+become ready, and then starts the application:
 
 ```bash
-npm run dev:local
+npm run dev
 ```
+
+`npm run dev:local` is an equivalent alias. `npm run start` applies the same
+music-service guarantee to the built production server. Use `npm run dev:app`
+or `npm run start:app` only for an intentional metadata-only session without
+the local music helper.
 
 The helper binds to `127.0.0.1:4317`; it is not exposed to the network. Set
 `LOCAL_VINYL_LIBRARY_DIR` to move the media root or
@@ -71,11 +78,14 @@ The helper binds to `127.0.0.1:4317`; it is not exposed to the network. Set
 
 ## Import a pressing
 
-1. Choose **Import local vinyl**.
+1. Choose **Import music**.
 2. Paste a Spotify track, album, or playlist URL.
 3. Optionally select local audio files in track order. Filenames are sorted
    numerically before they are matched.
-4. Choose **Import locally**.
+4. Leave **Find and save missing audio automatically** on if you want the
+   helper to fill any tracks without uploaded files, then confirm that you own
+   the media or have permission to keep it.
+5. Choose **Import music**.
 
 A track becomes a 45 RPM single. Albums and playlists preserve their original
 order, fill virtual sides to approximately 22 minutes, use at most sides A–D
@@ -86,15 +96,19 @@ Playlist metadata requires a local Spotify connection. Use the dialog's
 The refresh token is stored in the local library directory with owner-only file
 permissions.
 
-Importing without audio creates the sleeve and complete track listing with
-playback disabled. Select audio files and import the same Spotify URL again to
-attach them to the existing manifests.
+With automatic audio enabled, the import searches only the newly imported
+release, queues verified high-confidence matches, and saves them sequentially.
+Low-confidence matches remain in the review queue. The ownership confirmation
+is never remembered or checked automatically. Turn automatic audio off to
+create the sleeve and track listing without downloads; select files and import
+the same Spotify URL again to attach them to the existing manifests.
 
 ## Match the catalog and save authorized audio
 
-Choose **Local audio** to prepare every release already displayed on the
-shelf. The browser first syncs the seven seed records and all 94 tracks into
-the loopback helper, then includes any Spotify imports already stored there.
+Choose **Manage audio for music already on the shelf** from the **Import music**
+dialog to prepare every release already displayed on the shelf. The browser
+first syncs the seven seed records and all 94 tracks into the loopback helper,
+then includes any Spotify imports already stored there.
 **Match catalog** searches YouTube through the local `yt-dlp` executable with
 title, artist, and official-audio query variants. It scores each candidate
 using:
@@ -136,6 +150,12 @@ FFmpeg converts the audio to MP3, and the result passes through the same
 signature and 500 MB checks as a manually selected file. Downloading again for
 the same track replaces its previous local audio.
 
+Media transfers use a 45-second socket timeout, ten download and fragment
+retries, and capped exponential backoff. If a media host still exhausts those
+retries with a read timeout, the helper makes one bounded IPv4 fallback with a
+60-second socket timeout before returning an actionable network error. The
+existing 15-minute process timeout still applies to each attempt.
+
 Automatic search does not bypass the ownership confirmation and does not
 download low-confidence candidates. Use both the catalog queue and manual
 flow only for authorized media and in accordance with the source platform's
@@ -169,14 +189,21 @@ ranges so the existing player can seek without loading an entire file.
 
 ## Album artwork
 
-The original square album image is saved once per virtual pressing. The same
-local image URL is assigned to `coverImage` and `backCoverImage`, so the
-existing `frontArtwork` and `backArtwork` meshes render it on both sides of the
-cardstock sleeve without cropping. The spine and vinyl label remain
-deterministic procedural artwork.
+The original square album image is saved once per virtual pressing. Its
+filename, content type, byte count, and modification time are persisted in the
+record manifest. Browser URLs include that stable modification time as a
+revision, so a saved cover remains cacheable across restarts without reusing an
+older non-WebGL response. Legacy manifests receive this metadata from the
+existing local file the next time the helper starts.
 
-If the cover cannot be downloaded or decoded, the existing procedural surface
-remains visible.
+Album and playlist artwork is assigned to `coverImage`; their generated back
+surface remains available for the track list. A single uses the image on both
+sides. The spine and vinyl label remain deterministic procedural artwork.
+
+The helper validates the saved file before advertising its URL. If the file is
+missing, corrupt, or cannot be decoded after one cache-bypassing retry, the
+record and its songs stay in the catalog while the procedural surface remains
+visible.
 
 ## Remove local media
 

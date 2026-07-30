@@ -4,22 +4,29 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  asCatalogRecord,
   buildYtDlpArgs,
   buildYtDlpSearchArgs,
   buildVirtualRecords,
   classifyYtDlpFailure,
   chooseBestYouTubeCandidate,
+  LocalLibrary,
   LocalLibraryError,
   parseSpotifyReference,
   parseYouTubeReference,
   partitionTracks,
-  runWithForbiddenRetry,
+  reconcileCatalogOrder,
+  runWithYtDlpFallback,
   sanitizeYtDlpOutput,
   scoreYouTubeCandidate,
 } from "./library.mjs";
 import { startLocalLibraryServer } from "./server.mjs";
 
 const albumId = "4aawyAB9vmqN3uQ7FjRGTy";
+const fixtureCoverPng = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+  "base64",
+);
 
 function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
@@ -105,17 +112,11 @@ function mockSpotifyFetch(url) {
   }
   if (target === "https://images.example.test/cover.png") {
     return Promise.resolve(
-      new Response(
-        Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-          "base64",
-        ),
-        {
-          headers: {
-            "Content-Type": "image/png",
-          },
+      new Response(fixtureCoverPng, {
+        headers: {
+          "Content-Type": "image/png",
         },
-      ),
+      }),
     );
   }
   return Promise.resolve(
@@ -155,6 +156,179 @@ test("parses only exact Spotify track, album, and playlist references", () => {
   );
 });
 
+test("retries transient Spotify connection failures and completes the import", async () => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "side-one-spotify-retry-"),
+  );
+  let running;
+  let albumAttempts = 0;
+  try {
+    running = await startLocalLibraryServer({
+      port: 0,
+      root,
+      spotifyClientId: "fixture-client",
+      spotifyClientSecret: "fixture-secret",
+      spotifyRetryDelaysMs: [0, 0],
+      sleepImpl: async () => {},
+      fetchImpl: async (url) => {
+        if (
+          String(url) ===
+          `https://api.spotify.com/v1/albums/${albumId}`
+        ) {
+          albumAttempts += 1;
+          if (albumAttempts < 3) {
+            const error = new TypeError("fetch failed");
+            error.cause = { code: "UND_ERR_CONNECT_TIMEOUT" };
+            throw error;
+          }
+        }
+        return mockSpotifyFetch(url);
+      },
+    });
+
+    const response = await fetch(`${running.origin}/v1/imports`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://127.0.0.1:3000",
+      },
+      body: JSON.stringify({
+        spotifyUrl: `https://open.spotify.com/album/${albumId}`,
+      }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal(albumAttempts, 3);
+    assert.equal((await response.json()).records[0].title, "Local Test Album");
+  } finally {
+    if (running) await running.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("returns an actionable Spotify unavailable error without disturbing the catalog", async () => {
+  const { recordCatalog } = await import("../../app/record-catalog.ts");
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "side-one-spotify-unavailable-"),
+  );
+  let running;
+  let albumAttempts = 0;
+  try {
+    running = await startLocalLibraryServer({
+      port: 0,
+      root,
+      spotifyClientId: "fixture-client",
+      spotifyClientSecret: "fixture-secret",
+      spotifyRetryDelaysMs: [0, 0],
+      sleepImpl: async () => {},
+      fetchImpl: async (url) => {
+        if (
+          String(url) ===
+          `https://api.spotify.com/v1/albums/${albumId}`
+        ) {
+          albumAttempts += 1;
+          const error = new TypeError("fetch failed");
+          error.cause = { code: "UND_ERR_CONNECT_TIMEOUT" };
+          throw error;
+        }
+        return mockSpotifyFetch(url);
+      },
+    });
+
+    const [seed] = recordCatalog;
+    const syncResponse = await fetch(
+      `${running.origin}/v1/catalog-records/sync`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:3000",
+        },
+        body: JSON.stringify({ records: [seed] }),
+      },
+    );
+    assert.equal(syncResponse.status, 200);
+
+    const response = await fetch(`${running.origin}/v1/imports`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://127.0.0.1:3000",
+      },
+      body: JSON.stringify({
+        spotifyUrl: `https://open.spotify.com/album/${albumId}`,
+      }),
+    });
+    assert.equal(response.status, 503);
+    assert.equal(albumAttempts, 3);
+    const error = await response.json();
+    assert.equal(error.code, "SPOTIFY_UNAVAILABLE");
+    assert.match(error.error, /retry the import/i);
+    assert.equal(error.details.attempts, 3);
+    assert.equal(error.details.reason, "UND_ERR_CONNECT_TIMEOUT");
+
+    const catalog = await (
+      await fetch(`${running.origin}/v1/catalog`)
+    ).json();
+    assert.deepEqual(
+      catalog.records.map((record) => record.id),
+      [seed.id],
+    );
+  } finally {
+    if (running) await running.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps Spotify authentication and rate-limit responses specific", async () => {
+  const cases = [
+    {
+      status: 401,
+      code: "SPOTIFY_UNAUTHORIZED",
+      expectedAttempts: 1,
+    },
+    {
+      status: 403,
+      code: "SPOTIFY_FORBIDDEN",
+      expectedAttempts: 1,
+    },
+    {
+      status: 429,
+      code: "SPOTIFY_RATE_LIMITED",
+      expectedAttempts: 3,
+    },
+    {
+      status: 500,
+      code: "SPOTIFY_UNAVAILABLE",
+      errorStatus: 503,
+      expectedAttempts: 3,
+    },
+  ];
+
+  for (const fixture of cases) {
+    let attempts = 0;
+    const library = new LocalLibrary({
+      spotifyRetryDelaysMs: [0, 0],
+      sleepImpl: async () => {},
+      fetchImpl: async () => {
+        attempts += 1;
+        return jsonResponse(
+          { error: { message: `Fixture ${fixture.status}` } },
+          { status: fixture.status },
+        );
+      },
+    });
+
+    await assert.rejects(
+      library.spotifyGet("/albums/fixture", "token", "Spotify album"),
+      (error) =>
+        error instanceof LocalLibraryError &&
+        error.code === fixture.code &&
+        error.status === (fixture.errorStatus ?? fixture.status),
+    );
+    assert.equal(attempts, fixture.expectedAttempts);
+  }
+});
+
 test("accepts one exact YouTube video and builds a shell-free yt-dlp command", () => {
   assert.deepEqual(
     parseYouTubeReference(
@@ -190,6 +364,7 @@ test("accepts one exact YouTube video and builds a shell-free yt-dlp command", (
     ffmpegLocation: "/opt/local/bin/ffmpeg",
     jsRuntime: "node:/opt/local/bin/node",
     forceIpv4: true,
+    networkFallback: true,
   });
   assert.ok(args.includes("--ignore-config"));
   assert.ok(args.includes("--no-playlist"));
@@ -199,6 +374,11 @@ test("accepts one exact YouTube video and builds a shell-free yt-dlp command", (
   assert.ok(args.includes("--js-runtimes"));
   assert.ok(args.includes("node:/opt/local/bin/node"));
   assert.ok(args.includes("--force-ipv4"));
+  assert.equal(args[args.indexOf("--socket-timeout") + 1], "60");
+  assert.equal(args[args.indexOf("--retries") + 1], "10");
+  assert.equal(args[args.indexOf("--fragment-retries") + 1], "10");
+  assert.ok(args.includes("http:exp=1:20"));
+  assert.ok(args.includes("fragment:exp=1:20"));
   assert.equal(args.at(-2), "--");
   assert.equal(
     args.at(-1),
@@ -265,7 +445,7 @@ test("builds shell-free YouTube searches and ranks official audio above misleadi
   );
 });
 
-test("classifies 403 failures, redacts signed URLs, and retries only once", async () => {
+test("classifies transient yt-dlp failures and runs one bounded IPv4 fallback", async () => {
   const signedUrl =
     "https://rr.example.test/videoplayback?expire=123&sig=secret-token";
   const failure = classifyYtDlpFailure(
@@ -281,7 +461,7 @@ test("classifies 403 failures, redacts signed URLs, and retries only once", asyn
 
   const attempts = [];
   await assert.rejects(
-    runWithForbiddenRetry(async ({ attempt, forceIpv4 }) => {
+    runWithYtDlpFallback(async ({ attempt, forceIpv4 }) => {
       attempts.push({ attempt, forceIpv4 });
       throw new LocalLibraryError(
         "YT_DLP_FORBIDDEN",
@@ -295,6 +475,51 @@ test("classifies 403 failures, redacts signed URLs, and retries only once", asyn
     { attempt: 1, forceIpv4: false },
     { attempt: 2, forceIpv4: true },
   ]);
+
+  const timeoutFailure = classifyYtDlpFailure(
+    "ERROR: [download] Got error: HTTPSConnectionPool(host='rr.example.test', port=443): Read timed out. (read timeout=20.0). Giving up after 10 retries",
+  );
+  assert.equal(timeoutFailure.code, "YT_DLP_NETWORK_TIMEOUT");
+  assert.equal(timeoutFailure.retryableWithIpv4, true);
+  assert.match(timeoutFailure.message, /exhausted 10 retries/);
+
+  const timeoutAttempts = [];
+  const recovered = await runWithYtDlpFallback(
+    async ({ attempt, forceIpv4, networkFallback }) => {
+      timeoutAttempts.push({ attempt, forceIpv4, networkFallback });
+      if (attempt === 1) {
+        throw new LocalLibraryError(
+          "YT_DLP_NETWORK_TIMEOUT",
+          "fixture timeout",
+          504,
+        );
+      }
+      return "recovered";
+    },
+  );
+  assert.equal(recovered, "recovered");
+  assert.deepEqual(timeoutAttempts, [
+    { attempt: 1, forceIpv4: false, networkFallback: false },
+    { attempt: 2, forceIpv4: true, networkFallback: true },
+  ]);
+
+  let exhaustedAttempts = 0;
+  await assert.rejects(
+    runWithYtDlpFallback(async () => {
+      exhaustedAttempts += 1;
+      throw new LocalLibraryError(
+        "YT_DLP_NETWORK_TIMEOUT",
+        "fixture timeout",
+        504,
+      );
+    }),
+    (error) =>
+      error.code === "YT_DLP_NETWORK_TIMEOUT" &&
+      error.status === 504 &&
+      error.details?.usedIpv4Fallback === true &&
+      /both the standard and IPv4 fallback/.test(error.message),
+  );
+  assert.equal(exhaustedAttempts, 2);
 });
 
 test("preserves order while splitting long collections across four-sided volumes", () => {
@@ -332,6 +557,260 @@ test("preserves order while splitting long collections across four-sided volumes
     records[0].tracks.map((track) => track.trackNumber),
     Array.from({ length: 10 }, (_, index) => index + 1),
   );
+});
+
+test("reconciles saved shelf order with added, removed, and duplicate record ids", () => {
+  assert.deepEqual(
+    reconcileCatalogOrder(
+      ["record-c", "removed-record", "record-c", "record-a"],
+      ["record-a", "record-b", "record-c", "record-d"],
+    ),
+    ["record-c", "record-a", "record-b", "record-d"],
+  );
+  assert.deepEqual(
+    reconcileCatalogOrder(null, ["record-a", "record-b"]),
+    ["record-a", "record-b"],
+  );
+});
+
+test("keeps imported artwork on the front while reserving album and playlist backs for their tracklists", () => {
+  const coverUpdatedAt = "2026-07-30T18:30:00.000Z";
+  const tracks = Array.from({ length: 6 }, (_, index) => ({
+    spotifyTrackId: String(index + 1).padStart(22, "0"),
+    title: `Playlist Track ${index + 1}`,
+    artists: [index % 2 === 0 ? "First Artist" : "Second Artist"],
+    duration: 180,
+    sourceUrl: null,
+    originalIndex: index,
+  }));
+  const [playlistManifest] = buildVirtualRecords({
+    reference: {
+      type: "playlist",
+      id: "3333333333333333333333",
+      url: "https://open.spotify.com/playlist/3333333333333333333333",
+    },
+    title: "Fixture Playlist",
+    artist: "Various Artists",
+    year: 2026,
+    tracks,
+  });
+  const playlistRecord = asCatalogRecord(
+    { ...playlistManifest, coverFile: "cover.jpg", coverUpdatedAt },
+    "http://127.0.0.1:4317",
+  );
+
+  assert.equal(
+    new URL(playlistRecord.coverImage).searchParams.get("v"),
+    coverUpdatedAt,
+  );
+  assert.equal(playlistRecord.backCoverImage, undefined);
+  assert.equal(playlistRecord.localSource.type, "playlist");
+  assert.deepEqual(
+    playlistRecord.tracks.map((track) => track.title),
+    tracks.map((track) => track.title),
+  );
+
+  const albumRecord = asCatalogRecord(
+    {
+      ...playlistManifest,
+      source: { ...playlistManifest.source, type: "album" },
+      coverFile: "cover.jpg",
+      coverUpdatedAt,
+    },
+    "http://127.0.0.1:4317",
+  );
+  assert.equal(albumRecord.backCoverImage, undefined);
+  assert.equal(albumRecord.localSource.type, "album");
+
+  const trackRecord = asCatalogRecord(
+    {
+      ...playlistManifest,
+      source: { ...playlistManifest.source, type: "track" },
+      coverFile: "cover.jpg",
+      coverUpdatedAt,
+    },
+    "http://127.0.0.1:4317",
+  );
+  assert.equal(trackRecord.backCoverImage, trackRecord.coverImage);
+  assert.equal(trackRecord.localSource.type, "track");
+});
+
+test("migrates legacy cover metadata and keeps tracks when artwork becomes invalid", async () => {
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "side-one-cover-migration-"),
+  );
+  let running;
+  let restarted;
+  try {
+    const [manifest] = buildVirtualRecords({
+      reference: {
+        type: "album",
+        id: "4444444444444444444444",
+        url: "https://open.spotify.com/album/4444444444444444444444",
+      },
+      importedAt: "2026-07-30T18:00:00.000Z",
+      title: "Legacy Cover Album",
+      artist: "Fixture Artist",
+      year: 2026,
+      tracks: [
+        {
+          spotifyTrackId: "5555555555555555555555",
+          title: "Persisted Track",
+          artists: ["Fixture Artist"],
+          duration: 180,
+          sourceUrl: null,
+          originalIndex: 0,
+        },
+      ],
+    });
+    manifest.coverFile = "cover.png";
+    delete manifest.coverUpdatedAt;
+    delete manifest.coverBytes;
+    delete manifest.coverContentType;
+
+    const recordDirectory = path.join(root, "records", manifest.id);
+    const manifestFile = path.join(recordDirectory, "manifest.json");
+    const coverFile = path.join(recordDirectory, "cover.png");
+    await fs.mkdir(path.join(recordDirectory, "tracks"), { recursive: true });
+    await fs.writeFile(coverFile, fixtureCoverPng);
+    await fs.writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+    const persistedCoverMtime = (await fs.stat(coverFile)).mtime.toISOString();
+
+    running = await startLocalLibraryServer({ port: 0, root });
+    const migratedCatalog = await (
+      await fetch(`${running.origin}/v1/catalog`)
+    ).json();
+    assert.equal(migratedCatalog.records.length, 1);
+    assert.equal(migratedCatalog.records[0].tracks[0].title, "Persisted Track");
+    assert.equal(
+      new URL(migratedCatalog.records[0].coverImage).searchParams.get("v"),
+      persistedCoverMtime,
+    );
+    const migratedManifest = JSON.parse(
+      await fs.readFile(manifestFile, "utf8"),
+    );
+    assert.equal(migratedManifest.coverUpdatedAt, persistedCoverMtime);
+    assert.equal(migratedManifest.coverBytes, fixtureCoverPng.length);
+    assert.equal(migratedManifest.coverContentType, "image/png");
+
+    await running.close();
+    running = null;
+    await fs.writeFile(coverFile, Buffer.from("not an image"));
+
+    restarted = await startLocalLibraryServer({ port: 0, root });
+    const fallbackCatalog = await (
+      await fetch(`${restarted.origin}/v1/catalog`)
+    ).json();
+    assert.equal(fallbackCatalog.records.length, 1);
+    assert.equal(fallbackCatalog.records[0].coverImage, undefined);
+    assert.equal(fallbackCatalog.records[0].tracks[0].title, "Persisted Track");
+  } finally {
+    if (running) await running.close();
+    if (restarted) await restarted.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("persists a validated shelf order across sync, restart, and deletion", async () => {
+  const { recordCatalog } = await import("../../app/record-catalog.ts");
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "side-one-catalog-order-"),
+  );
+  let running;
+  let restarted;
+  try {
+    running = await startLocalLibraryServer({ port: 0, root });
+    const records = recordCatalog.slice(0, 3);
+    const syncResponse = await fetch(
+      `${running.origin}/v1/catalog-records/sync`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:3000",
+        },
+        body: JSON.stringify({ records }),
+      },
+    );
+    assert.equal(syncResponse.status, 200);
+
+    const desiredOrder = [records[2].id, records[0].id, records[1].id];
+    const orderResponse = await fetch(`${running.origin}/v1/catalog/order`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://127.0.0.1:3000",
+      },
+      body: JSON.stringify({ recordIds: desiredOrder }),
+    });
+    assert.equal(orderResponse.status, 200);
+    assert.deepEqual(
+      (await orderResponse.json()).records.map((record) => record.id),
+      desiredOrder,
+    );
+
+    const invalidResponse = await fetch(`${running.origin}/v1/catalog/order`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://127.0.0.1:3000",
+      },
+      body: JSON.stringify({ recordIds: desiredOrder.slice(1) }),
+    });
+    assert.equal(invalidResponse.status, 422);
+    assert.equal(
+      (await invalidResponse.json()).code,
+      "INVALID_CATALOG_ORDER",
+    );
+
+    const repeatSyncResponse = await fetch(
+      `${running.origin}/v1/catalog-records/sync`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "http://127.0.0.1:3000",
+        },
+        body: JSON.stringify({ records }),
+      },
+    );
+    assert.equal(repeatSyncResponse.status, 200);
+    assert.deepEqual(
+      (
+        await (await fetch(`${running.origin}/v1/catalog`)).json()
+      ).records.map((record) => record.id),
+      desiredOrder,
+    );
+
+    await running.close();
+    running = null;
+    restarted = await startLocalLibraryServer({ port: 0, root });
+    assert.deepEqual(
+      (
+        await (await fetch(`${restarted.origin}/v1/catalog`)).json()
+      ).records.map((record) => record.id),
+      desiredOrder,
+    );
+
+    const deleteResponse = await fetch(
+      `${restarted.origin}/v1/records/${encodeURIComponent(desiredOrder[1])}`,
+      {
+        method: "DELETE",
+        headers: { Origin: "http://localhost:3000" },
+      },
+    );
+    assert.equal(deleteResponse.status, 204);
+    assert.deepEqual(
+      (
+        await (await fetch(`${restarted.origin}/v1/catalog`)).json()
+      ).records.map((record) => record.id),
+      [desiredOrder[0], desiredOrder[2]],
+    );
+  } finally {
+    if (running) await running.close();
+    if (restarted) await restarted.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
 });
 
 test("imports metadata and cover, downloads or uploads audio, serves ranges, persists, and deletes without a database", async () => {
@@ -394,15 +873,52 @@ test("imports metadata and cover, downloads or uploads audio, serves ranges, per
     assert.equal(imported.records.length, 1);
     const [record] = imported.records;
     assert.equal(record.title, "Local Test Album");
-    assert.equal(record.coverImage, record.backCoverImage);
+    assert.equal(record.backCoverImage, undefined);
     assert.match(
       record.coverImage,
       new RegExp(
         `^${running.origin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/media/`,
       ),
     );
+    const importedCoverRevision = new URL(record.coverImage).searchParams.get(
+      "v",
+    );
+    assert.ok(importedCoverRevision);
     assert.equal(record.tracks.length, 2);
     assert.equal(record.tracks[0].previewUrl, undefined);
+
+    const unversionedCoverUrl = new URL(record.coverImage);
+    unversionedCoverUrl.search = "";
+    const unversionedCoverResponse = await fetch(unversionedCoverUrl);
+    assert.equal(unversionedCoverResponse.status, 200);
+    assert.equal(unversionedCoverResponse.headers.get("vary"), "Origin");
+    assert.equal(
+      unversionedCoverResponse.headers.get("cache-control"),
+      "private, no-cache",
+    );
+    assert.equal(
+      unversionedCoverResponse.headers.get("cross-origin-resource-policy"),
+      "cross-origin",
+    );
+    assert.deepEqual(
+      Buffer.from(await unversionedCoverResponse.arrayBuffer()),
+      fixtureCoverPng,
+    );
+
+    const corsCoverResponse = await fetch(record.coverImage, {
+      headers: { Origin: "http://localhost:3000" },
+    });
+    assert.equal(corsCoverResponse.status, 200);
+    assert.equal(
+      corsCoverResponse.headers.get("access-control-allow-origin"),
+      "http://localhost:3000",
+    );
+    assert.equal(corsCoverResponse.headers.get("vary"), "Origin");
+    assert.equal(
+      corsCoverResponse.headers.get("cache-control"),
+      "private, max-age=31536000, immutable",
+    );
+    await corsCoverResponse.arrayBuffer();
 
     const rejectedDownload = await fetch(
       `${running.origin}/v1/records/${record.id}/tracks/${record.tracks[0].id}/youtube-download`,
@@ -498,7 +1014,13 @@ test("imports metadata and cover, downloads or uploads audio, serves ranges, per
       "manifest.json",
     );
     const catalogFile = path.join(root, "catalog.json");
-    assert.equal(JSON.parse(await fs.readFile(manifestFile, "utf8")).version, 1);
+    const importedManifest = JSON.parse(
+      await fs.readFile(manifestFile, "utf8"),
+    );
+    assert.equal(importedManifest.version, 1);
+    assert.equal(importedManifest.coverUpdatedAt, importedCoverRevision);
+    assert.equal(importedManifest.coverBytes, fixtureCoverPng.length);
+    assert.equal(importedManifest.coverContentType, "image/png");
     assert.equal(JSON.parse(await fs.readFile(catalogFile, "utf8")).version, 1);
 
     await running.close();
@@ -515,6 +1037,10 @@ test("imports metadata and cover, downloads or uploads audio, serves ranges, per
     ).json();
     assert.equal(persisted.records.length, 1);
     assert.ok(persisted.records[0].tracks[0].previewUrl);
+    assert.equal(
+      new URL(persisted.records[0].coverImage).searchParams.get("v"),
+      importedCoverRevision,
+    );
 
     const deleteResponse = await fetch(
       `${restarted.origin}/v1/records/${record.id}`,

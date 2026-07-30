@@ -47,6 +47,7 @@ next-env.d.ts
 /.local-vinyl-library/
 /.local-tools/
 /.openai/hosting.json
+/tmp/video/
 
 # Generated preview audio is committed as a rights-safe starter catalog.
 # Put contributor-owned replacement media under /public/records/.

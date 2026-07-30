@@ -133,6 +133,18 @@ export async function syncCatalogRecords(
   return validateRecords(result.records);
 }
 
+export async function saveLocalCatalogOrder(
+  recordIds: string[],
+): Promise<CatalogRecord[]> {
+  const response = await fetch(`${localLibraryOrigin}/v1/catalog/order`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ recordIds }),
+  });
+  const result = await readResponse<{ records: unknown }>(response);
+  return validateRecords(result.records);
+}
+
 export async function matchLocalRecord(
   recordId: string,
   options: { trackIds?: string[]; rematch?: boolean } = {},

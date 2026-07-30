@@ -11,6 +11,7 @@ import {
 import {
   RecordShelfEngine,
   type SceneMode,
+  type SleevePresentationState,
   type VinylLibraryDiagnostics,
 } from "./RecordShelfEngine";
 import {
@@ -19,8 +20,10 @@ import {
   type RecordTrack,
   type VinylDiscNumber,
 } from "./record-catalog";
+import type { VinylPresentation } from "./record-motion";
 import { LocalLibraryImport } from "./LocalLibraryImport";
 import { LocalAudioManager } from "./LocalAudioManager";
+import { RearrangeLibrary } from "./RearrangeLibrary";
 import {
   YouTubeDownloadDialog,
   type YouTubeDownloadTarget,
@@ -28,6 +31,7 @@ import {
 import {
   fetchLocalCatalog,
   removeLocalRecord,
+  saveLocalCatalogOrder,
   syncCatalogRecords,
 } from "./local-library";
 import { siteConfig } from "./site-config";
@@ -108,18 +112,18 @@ type LibraryCommands = {
   play: (trackId?: string) => void;
   pause: () => void;
   stop: () => void;
+  flipSleeve: () => void;
   resetView: () => void;
   returnToShelf: () => void;
 };
 
 function mergeLocalRecords(localRecords: CatalogRecord[]): CatalogRecord[] {
-  const localById = new Map(
-    localRecords.map((record) => [record.id, record]),
-  );
-  const seedIds = new Set(recordCatalog.map((record) => record.id));
-  const seeds = recordCatalog.map((record) => {
-    const overlay = localById.get(record.id);
-    if (!overlay) return record;
+  const seedById = new Map(recordCatalog.map((record) => [record.id, record]));
+  const mergedIds = new Set<string>();
+  const merged = localRecords.map((overlay) => {
+    mergedIds.add(overlay.id);
+    const record = seedById.get(overlay.id);
+    if (!record) return overlay;
     const overlayTracks = new Map(
       overlay.tracks.map((track) => [track.id, track]),
     );
@@ -141,14 +145,15 @@ function mergeLocalRecords(localRecords: CatalogRecord[]): CatalogRecord[] {
     };
   });
   return [
-    ...seeds,
-    ...localRecords.filter((record) => !seedIds.has(record.id)),
+    ...merged,
+    ...recordCatalog.filter((record) => !mergedIds.has(record.id)),
   ];
 }
 
 export function VinylLibrary() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const vinylPlayRef = useRef<HTMLButtonElement>(null);
+  const rearrangeTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const settingsCloseRef = useRef<HTMLButtonElement>(null);
   const engineRef = useRef<RecordShelfEngine | null>(null);
@@ -157,6 +162,10 @@ export function VinylLibrary() {
   const pendingTrackRef = useRef<PendingTrack>(null);
   const queuedTrackTransitionRef = useRef<PendingTrack>(null);
   const pendingFocusRef = useRef<number | null>(null);
+  const pendingImportedRecordIdRef = useRef<string | null>(null);
+  const pendingBrowseRecordIdRef = useRef<string | null>(null);
+  const pendingRearrangeOpenRef = useRef(false);
+  const rearrangeAnchorRecordIdRef = useRef<string | null>(null);
   const turntableVariantRef = useRef<TurntableVariantId>(
     defaultTurntableVariantId,
   );
@@ -166,6 +175,7 @@ export function VinylLibrary() {
     play() {},
     pause() {},
     stop() {},
+    flipSleeve() {},
     resetView() {},
     returnToShelf() {},
   });
@@ -173,6 +183,14 @@ export function VinylLibrary() {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
   const [sceneMode, setSceneMode] = useState<SceneMode>("browse");
+  const [sleeveState, setSleeveState] = useState<SleevePresentationState>({
+    recordIndex: 0,
+    face: "front",
+    flipping: false,
+    canFlip: false,
+  });
+  const [vinylPresentation, setVinylPresentation] =
+    useState<VinylPresentation>("sleeve");
   const [playback, setPlayback] = useState<PlaybackState>(() =>
     initialPlaybackState(),
   );
@@ -184,14 +202,22 @@ export function VinylLibrary() {
   const [youtubeDownloadTarget, setYoutubeDownloadTarget] =
     useState<YouTubeDownloadTarget | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rearrangeOpen, setRearrangeOpen] = useState(false);
+  const [rearrangeSaving, setRearrangeSaving] = useState(false);
+  const [rearrangeError, setRearrangeError] = useState<string | null>(null);
   const [turntableVariantId, setTurntableVariantId] =
     useState<TurntableVariantId>(savedTurntableVariantId);
   const [turntableVariantStatus, setTurntableVariantStatus] =
     useState("Player ready");
+  const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Preparing the collection");
   const closeLocalImport = useCallback(() => setImportOpen(false), []);
   const closeLocalAudio = useCallback(() => setLocalAudioOpen(false), []);
+  const openLocalAudio = useCallback(() => {
+    setImportOpen(false);
+    setLocalAudioOpen(true);
+  }, []);
   const closeYouTubeDownload = useCallback(
     () => setYoutubeDownloadTarget(null),
     [],
@@ -199,6 +225,40 @@ export function VinylLibrary() {
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
     window.setTimeout(() => settingsTriggerRef.current?.focus(), 0);
+  }, []);
+  const openRearrange = useCallback(() => {
+    if (
+      sceneMode === "focusing" ||
+      sceneMode === "returning" ||
+      rearrangeSaving
+    ) {
+      return;
+    }
+    rearrangeAnchorRecordIdRef.current =
+      records[selectedIndex ?? activeIndex]?.id ?? null;
+    setRearrangeError(null);
+    if (sceneMode === "browse") {
+      setRearrangeOpen(true);
+      setStatus("Rearrange mode");
+      return;
+    }
+    pendingRearrangeOpenRef.current = true;
+    setStatus("Returning to the shelf to rearrange");
+    commandsRef.current.returnToShelf();
+  }, [
+    activeIndex,
+    rearrangeSaving,
+    records,
+    sceneMode,
+    selectedIndex,
+  ]);
+  const closeRearrange = useCallback(() => {
+    pendingRearrangeOpenRef.current = false;
+    rearrangeAnchorRecordIdRef.current = null;
+    setRearrangeOpen(false);
+    setRearrangeError(null);
+    setStatus("Shelf order unchanged");
+    window.setTimeout(() => rearrangeTriggerRef.current?.focus(), 0);
   }, []);
 
   const refreshLocalLibrary = useCallback(async () => {
@@ -214,6 +274,47 @@ export function VinylLibrary() {
       setCatalogReady(true);
     }
   }, []);
+
+  const revealImportedRecord = useCallback(
+    async (importedRecords: CatalogRecord[]) => {
+      const importedRecord = importedRecords[0];
+      if (!importedRecord) return;
+      pendingImportedRecordIdRef.current = importedRecord.id;
+      setImportOpen(false);
+      setStatus(`Opening ${importedRecord.shortTitle}`);
+      await refreshLocalLibrary();
+    },
+    [refreshLocalLibrary],
+  );
+
+  const saveRecordOrder = useCallback(
+    async (recordIds: string[]) => {
+      const activeRecordId =
+        rearrangeAnchorRecordIdRef.current ??
+        records[activeIndex]?.id ??
+        null;
+      setRearrangeSaving(true);
+      setRearrangeError(null);
+      setStatus("Saving shelf order");
+      try {
+        const orderedRecords = await saveLocalCatalogOrder(recordIds);
+        pendingBrowseRecordIdRef.current = activeRecordId;
+        rearrangeAnchorRecordIdRef.current = null;
+        setRecords(mergeLocalRecords(orderedRecords));
+        setRearrangeOpen(false);
+        setStatus("Updating the shelf");
+        window.setTimeout(() => canvasRef.current?.focus(), 0);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unable to save shelf order.";
+        setRearrangeError(message);
+        setStatus(message);
+      } finally {
+        setRearrangeSaving(false);
+      }
+    },
+    [activeIndex, records],
+  );
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -306,6 +407,11 @@ export function VinylLibrary() {
     playback.mode === "cueing" ||
     playback.mode === "stopping";
   const isPlaying = playback.mode === "playing";
+  const sleeveFlipLabel =
+    sleeveState.face === "back" ? "Show front" : "Show back";
+  const sleeveFlipAriaLabel = `${
+    sleeveState.flipping ? "Turning" : sleeveFlipLabel
+  } ${isFocused ? selectedRecord?.title ?? "selected record" : activeRecord.title}`;
   const timelineDuration = selectedTrack?.previewUrl
     ? playback.duration || selectedTrack.duration || 0
     : selectedTrack?.duration ?? 0;
@@ -536,6 +642,13 @@ export function VinylLibrary() {
       setSelectedTrackId(null);
       queuedTrackTransitionRef.current = null;
       setSceneMode("browse");
+      setSleeveState({
+        recordIndex: 0,
+        face: "front",
+        flipping: false,
+        canFlip: false,
+      });
+      setVinylPresentation("sleeve");
       const resetPlayback = initialPlaybackState(playbackRef.current.volume);
       playbackRef.current = resetPlayback;
       setPlayback(resetPlayback);
@@ -658,10 +771,45 @@ export function VinylLibrary() {
             pendingFocusRef.current = null;
             queueMicrotask(() => engineRef.current?.focusRecord(target));
           }
+          if (
+            nextMode === "browse" &&
+            pendingRearrangeOpenRef.current
+          ) {
+            pendingRearrangeOpenRef.current = false;
+            queueMicrotask(() => {
+              setRearrangeOpen(true);
+              setStatus("Rearrange mode");
+            });
+          }
         },
+        onSleeveState: setSleeveState,
         onStatus: setStatus,
         onReady: () => {
           setReady(true);
+          const importedRecordId = pendingImportedRecordIdRef.current;
+          const importedRecordIndex = importedRecordId
+            ? records.findIndex((record) => record.id === importedRecordId)
+            : -1;
+          if (importedRecordIndex >= 0) {
+            pendingImportedRecordIdRef.current = null;
+            setStatus(`Opening ${records[importedRecordIndex].shortTitle}`);
+            queueMicrotask(() =>
+              engineRef.current?.focusRecord(importedRecordIndex),
+            );
+            return;
+          }
+          const browseRecordId = pendingBrowseRecordIdRef.current;
+          const browseRecordIndex = browseRecordId
+            ? records.findIndex((record) => record.id === browseRecordId)
+            : -1;
+          if (browseRecordIndex >= 0) {
+            pendingBrowseRecordIdRef.current = null;
+            setStatus("Shelf order saved");
+            queueMicrotask(() =>
+              engineRef.current?.browseTo(browseRecordIndex),
+            );
+            return;
+          }
           setStatus(
             `${physicalDiscCount} discs across ${records.length} releases ready`,
           );
@@ -709,6 +857,7 @@ export function VinylLibrary() {
           control.style.setProperty("--vinyl-play-y", `${anchor.y}px`);
           control.dataset.anchored = String(anchor.visible);
         },
+        onVinylPresentation: setVinylPresentation,
       });
       engineRef.current = engine;
       void engine
@@ -746,6 +895,7 @@ export function VinylLibrary() {
             play: (trackId?: string) => void;
             pause: () => void;
             stop: () => void;
+            flipSleeve: () => void;
             resetView: () => void;
             returnToShelf: () => void;
           };
@@ -757,6 +907,7 @@ export function VinylLibrary() {
         play: (trackId) => commandsRef.current.play(trackId),
         pause: () => commandsRef.current.pause(),
         stop: () => commandsRef.current.stop(),
+        flipSleeve: () => commandsRef.current.flipSleeve(),
         resetView: () => commandsRef.current.resetView(),
         returnToShelf: () => commandsRef.current.returnToShelf(),
       };
@@ -809,6 +960,9 @@ export function VinylLibrary() {
       },
       pause: pausePlayback,
       stop: () => stopPlayback(false),
+      flipSleeve: () => {
+        engineRef.current?.toggleSleeveFace();
+      },
       resetView: () => engineRef.current?.resetFocusView(),
       returnToShelf,
     };
@@ -822,27 +976,47 @@ export function VinylLibrary() {
     records,
   ]);
 
-  const removeSelectedLocalRecord = useCallback(async () => {
-    if (!selectedRecord?.localSource) return;
+  const deleteLocalRecord = useCallback(async (record: CatalogRecord) => {
+    if (
+      record.localSource?.provider !== "spotify" ||
+      deletingRecordId !== null
+    ) {
+      return;
+    }
     const approved = window.confirm(
-      `Remove ${selectedRecord.title} and its attached local audio files from this computer?`,
+      `Delete "${record.title}" from your local collection? This permanently removes the record, its cached artwork, and any attached local audio files from this computer.`,
     );
     if (!approved) return;
-    setStatus(`Removing ${selectedRecord.shortTitle}`);
+    setDeletingRecordId(record.id);
+    setStatus(`Deleting ${record.shortTitle}`);
     pendingTrackRef.current = null;
     queuedTrackTransitionRef.current = null;
-    await audioRef.current?.stop(80).catch(() => undefined);
-    await removeLocalRecord(selectedRecord.id);
-    await refreshLocalLibrary();
-    setStatus(`${selectedRecord.shortTitle} removed from the local collection`);
-  }, [refreshLocalLibrary, selectedRecord]);
+    pendingFocusRef.current = null;
+    try {
+      await audioRef.current?.stop(80).catch(() => undefined);
+      await removeLocalRecord(record.id);
+      await refreshLocalLibrary();
+      setStatus(`${record.shortTitle} deleted from the local collection`);
+    } catch (error) {
+      setStatus(
+        error instanceof Error ? error.message : `Unable to delete ${record.shortTitle}`,
+      );
+    } finally {
+      setDeletingRecordId(null);
+    }
+  }, [deletingRecordId, refreshLocalLibrary]);
 
   const themeStyle = {
     "--paper": siteConfig.theme.paper,
     "--paper-deep": siteConfig.theme.paperDeep,
+    "--paper-light": siteConfig.theme.paperLight,
     "--ink": siteConfig.theme.ink,
     "--ink-soft": siteConfig.theme.inkSoft,
     "--accent": siteConfig.theme.accent,
+    "--tan": siteConfig.theme.tan,
+    "--line": siteConfig.theme.line,
+    "--structure": siteConfig.theme.structure,
+    "--soft-hover": siteConfig.theme.softHover,
     "--night": siteConfig.theme.night,
     "--brass": siteConfig.theme.brass,
   } as CSSProperties;
@@ -851,8 +1025,19 @@ export function VinylLibrary() {
     <main
       className={`vinyl-experience ${ready ? "is-ready" : ""} ${
         isFocused ? "is-focused" : "is-browsing"
-      } ${isPlaying ? "is-playing" : ""}`}
+      } ${isPlaying ? "is-playing" : ""} ${
+        rearrangeOpen ? "is-rearranging" : ""
+      } ${
+        vinylPresentation === "sleeve" ? "" : "is-vinyl-presented"
+      } ${
+        vinylPresentation === "turntable" ? "is-turntable-focused" : ""
+      } ${
+        vinylPresentation === "moving-to-sleeve"
+          ? "is-vinyl-returning"
+          : ""
+      }`}
       style={themeStyle}
+      data-vinyl-presentation={vinylPresentation}
     >
       <canvas
         ref={canvasRef}
@@ -860,7 +1045,7 @@ export function VinylLibrary() {
         data-testid="archive-canvas"
         role="application"
         tabIndex={0}
-        aria-label={`Interactive three-dimensional collection of ${records.length} releases and ${physicalDiscCount} vinyl discs. Drag, scroll, or use the arrow keys to browse. Press Enter to inspect the selected sleeve.`}
+        aria-label={`Interactive three-dimensional collection of ${records.length} releases and ${physicalDiscCount} vinyl discs. Drag, scroll, or use the arrow keys to browse. Press F to flip the active sleeve and Enter to inspect it.`}
       />
 
       <button
@@ -907,6 +1092,19 @@ export function VinylLibrary() {
         </div>
         <div className="archive-header__actions">
           <button
+            ref={rearrangeTriggerRef}
+            type="button"
+            className="rearrange-trigger"
+            data-testid="open-rearrange-library"
+            aria-haspopup="dialog"
+            aria-expanded={rearrangeOpen}
+            disabled={!catalogReady || isBusy || rearrangeSaving}
+            onClick={openRearrange}
+          >
+            <span aria-hidden="true">↕</span>
+            Rearrange
+          </button>
+          <button
             ref={settingsTriggerRef}
             type="button"
             className="settings-trigger"
@@ -923,23 +1121,11 @@ export function VinylLibrary() {
             className={`local-import-trigger ${
               localServiceAvailable ? "is-connected" : ""
             }`}
-            data-testid="open-local-import"
+            data-testid="open-import-music"
             onClick={() => setImportOpen(true)}
           >
             <span aria-hidden="true" />
-            Import local vinyl
-          </button>
-          <button
-            type="button"
-            className={`local-import-trigger local-audio-trigger ${
-              localServiceAvailable ? "is-connected" : ""
-            }`}
-            data-testid="open-local-audio"
-            disabled={!localServiceAvailable}
-            onClick={() => setLocalAudioOpen(true)}
-          >
-            <span aria-hidden="true" />
-            Local audio
+            Import music
           </button>
           <div className="archive-count" aria-hidden="true">
             <span>
@@ -963,42 +1149,99 @@ export function VinylLibrary() {
         </p>
         <h1>{activeRecord.shortTitle}</h1>
         <p className="browse-caption__artist">{activeRecord.artist}</p>
-        <button
-          type="button"
-          className="inspect-button"
-          data-testid="inspect-active"
-          disabled={isFocused}
-          onClick={() => engineRef.current?.focusRecord(activeIndex)}
-          aria-label={`Inspect ${activeRecord.title} by ${activeRecord.artist}`}
-        >
-          <span>View record</span>
-          <span aria-hidden="true">↗</span>
-        </button>
+        <div className="browse-caption__actions">
+          <button
+            type="button"
+            className="inspect-button"
+            data-testid="inspect-active"
+            disabled={isFocused}
+            onClick={() => engineRef.current?.focusRecord(activeIndex)}
+            aria-label={`Inspect ${activeRecord.title} by ${activeRecord.artist}`}
+          >
+            <span>View record</span>
+            <span aria-hidden="true">↗</span>
+          </button>
+          <button
+            type="button"
+            className="sleeve-flip-button"
+            data-testid="flip-sleeve-browse"
+            disabled={isFocused || !sleeveState.canFlip}
+            onClick={() => engineRef.current?.toggleSleeveFace()}
+            aria-label={sleeveFlipAriaLabel}
+          >
+            <span>{sleeveState.flipping ? "Turning" : sleeveFlipLabel}</span>
+            <span aria-hidden="true">↻</span>
+          </button>
+          {activeRecord.localSource?.provider === "spotify" ? (
+            <button
+              type="button"
+              className="delete-record-button delete-record-button--browse"
+              data-testid="delete-record-browse"
+              disabled={isBusy || deletingRecordId === activeRecord.id}
+              onClick={() => void deleteLocalRecord(activeRecord)}
+              aria-label={`Delete ${activeRecord.title}`}
+            >
+              {deletingRecordId === activeRecord.id ? "Deleting…" : "Delete"}
+            </button>
+          ) : null}
+        </div>
       </section>
 
-      <button
-        type="button"
-        className="archive-arrow archive-arrow--left"
-        data-testid="browse-previous"
-        aria-label="Previous record"
-        disabled={isFocused || activeIndex === 0}
-        onClick={() => engineRef.current?.browseBy(-1)}
+      <nav
+        className="archive-edge-navigation"
+        aria-label="Jump to collection edge"
       >
-        <ArrowIcon direction="left" />
-      </button>
-      <button
-        type="button"
-        className="archive-arrow archive-arrow--right"
-        data-testid="browse-next"
-        aria-label="Next record"
-        disabled={isFocused || activeIndex === records.length - 1}
-        onClick={() => engineRef.current?.browseBy(1)}
-      >
-        <ArrowIcon direction="right" />
-      </button>
+        <button
+          type="button"
+          className="archive-arrow archive-arrow--left"
+          data-testid="browse-first"
+          aria-label="Go to first record"
+          aria-keyshortcuts="Meta+ArrowLeft Control+ArrowLeft"
+          title="First record · Command or Control + Left Arrow"
+          disabled={isFocused || activeIndex === 0}
+          onClick={() => engineRef.current?.browseTo(0)}
+        >
+          <span className="archive-arrow__shortcut" aria-hidden="true">
+            <kbd>⌘</kbd>
+            <ArrowIcon direction="left" />
+          </span>
+        </button>
+        <button
+          type="button"
+          className="archive-arrow archive-arrow--right"
+          data-testid="browse-last"
+          aria-label="Go to last record"
+          aria-keyshortcuts="Meta+ArrowRight Control+ArrowRight"
+          title="Last record · Command or Control + Right Arrow"
+          disabled={isFocused || activeIndex === records.length - 1}
+          onClick={() =>
+            engineRef.current?.browseTo(records.length - 1)
+          }
+        >
+          <span className="archive-arrow__shortcut" aria-hidden="true">
+            <kbd>⌘</kbd>
+            <ArrowIcon direction="right" />
+          </span>
+        </button>
+      </nav>
 
       <nav className="archive-index" aria-label="Collection position">
-        <div className="archive-index__ticks">
+        <button
+          type="button"
+          className="archive-index__arrow"
+          data-testid="browse-previous"
+          aria-label="Previous record"
+          disabled={isFocused || activeIndex === 0}
+          onClick={() => engineRef.current?.browseBy(-1)}
+        >
+          <ArrowIcon direction="left" />
+        </button>
+        <span className="archive-index__position" aria-live="polite">
+          <strong>{String(activeIndex + 1).padStart(2, "0")}</strong>
+          <i aria-hidden="true">/</i>
+          <span>{String(records.length).padStart(2, "0")}</span>
+        </span>
+        <div className="archive-index__targets">
           {records.map((record, index) => (
             <button
               key={record.id}
@@ -1013,18 +1256,22 @@ export function VinylLibrary() {
             </button>
           ))}
         </div>
-        <div className="input-hint" aria-hidden="true">
-          <span>DRAG</span>
-          <i />
-          <span>SCROLL</span>
-          <i />
-          <span>ARROW KEYS</span>
-        </div>
+        <button
+          type="button"
+          className="archive-index__arrow"
+          data-testid="browse-next"
+          aria-label="Next record"
+          disabled={isFocused || activeIndex === records.length - 1}
+          onClick={() => engineRef.current?.browseBy(1)}
+        >
+          <ArrowIcon direction="right" />
+        </button>
       </nav>
 
       <aside
         className="album-panel"
         aria-hidden={!isFocused}
+        inert={isFocused ? undefined : true}
         aria-label={
           selectedRecord ? `Details for ${selectedRecord.title}` : "Album details"
         }
@@ -1032,15 +1279,30 @@ export function VinylLibrary() {
       >
         {selectedRecord ? (
           <div className="album-panel__inner">
-            <button
-              type="button"
-              className="back-button"
-              data-testid="return-to-archive"
-              onClick={returnToShelf}
-            >
-              <ArrowIcon direction="left" />
-              <span>{siteConfig.returnLabel}</span>
-            </button>
+            <div className="album-panel__topline">
+              <button
+                type="button"
+                className="back-button"
+                data-testid="return-to-archive"
+                onClick={returnToShelf}
+              >
+                <ArrowIcon direction="left" />
+                <span>{siteConfig.returnLabel}</span>
+              </button>
+              <button
+                type="button"
+                className="mobile-sleeve-flip"
+                data-testid="flip-sleeve-mobile"
+                disabled={!sleeveState.canFlip}
+                onClick={() => engineRef.current?.toggleSleeveFace()}
+                aria-label={sleeveFlipAriaLabel}
+              >
+                <span aria-hidden="true">↻</span>
+                <span>
+                  {sleeveState.flipping ? "Turning" : sleeveFlipLabel}
+                </span>
+              </button>
+            </div>
 
             <div className="album-panel__position" aria-hidden="true">
               <span>{String(selectedIndex! + 1).padStart(2, "0")}</span>
@@ -1168,16 +1430,30 @@ export function VinylLibrary() {
               {selectedRecord.localSource?.provider === "spotify" ? (
                 <button
                   type="button"
-                  className="remove-local-record"
-                  onClick={() => void removeSelectedLocalRecord()}
+                  className="delete-record-button delete-record-button--inspect"
+                  data-testid="delete-record-inspect"
+                  disabled={isBusy || deletingRecordId === selectedRecord.id}
+                  onClick={() => void deleteLocalRecord(selectedRecord)}
+                  aria-label={`Delete ${selectedRecord.title}`}
                 >
-                  Remove local pressing
+                  {deletingRecordId === selectedRecord.id
+                    ? "Deleting record…"
+                    : "Delete record"}
                 </button>
               ) : null}
             </div>
 
             <div className="focus-controls" aria-label="Inspection controls">
               <span>Drag to orbit · scroll to zoom</span>
+              <button
+                type="button"
+                data-testid="flip-sleeve-inspect"
+                disabled={!sleeveState.canFlip}
+                onClick={() => engineRef.current?.toggleSleeveFace()}
+                aria-label={sleeveFlipAriaLabel}
+              >
+                {sleeveState.flipping ? "Turning sleeve" : sleeveFlipLabel}
+              </button>
               <button
                 type="button"
                 data-testid="reset-view"
@@ -1386,6 +1662,16 @@ export function VinylLibrary() {
         open={importOpen}
         onClose={closeLocalImport}
         onLibraryChanged={refreshLocalLibrary}
+        onImportComplete={revealImportedRecord}
+        onOpenAudioManager={openLocalAudio}
+      />
+      <RearrangeLibrary
+        open={rearrangeOpen}
+        records={records}
+        saving={rearrangeSaving}
+        error={rearrangeError}
+        onCancel={closeRearrange}
+        onSave={saveRecordOrder}
       />
       {localAudioOpen ? (
         <LocalAudioManager
@@ -1408,8 +1694,8 @@ export function VinylLibrary() {
 
       <div className="sr-only" aria-live="polite">
         {isFocused && selectedRecord
-          ? `Inspecting ${selectedRecord.title} by ${selectedRecord.artist}. Playback is ${playback.mode}.`
-          : `Selected ${activeRecord.title} by ${activeRecord.artist}.`}
+          ? `Inspecting ${selectedRecord.title} by ${selectedRecord.artist}. ${sleeveState.face} cover visible. Playback is ${playback.mode}.`
+          : `Selected ${activeRecord.title} by ${activeRecord.artist}. ${sleeveState.face} cover visible.`}
       </div>
     </main>
   );

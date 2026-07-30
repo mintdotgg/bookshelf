@@ -9,6 +9,11 @@ export type SleeveModelOptions = {
   frontTexture: THREE.Texture;
   backTexture: THREE.Texture;
   spineTexture: THREE.Texture;
+  spineDimensions: {
+    width: number;
+    height: number;
+    surfaceOffset: number;
+  };
 };
 
 export type SleeveModel = {
@@ -46,6 +51,7 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
     frontTexture,
     backTexture,
     spineTexture,
+    spineDimensions,
   } = options;
   const root = new THREE.Group();
   root.name = "recordSleeve";
@@ -112,17 +118,20 @@ export function createSleeveModel(options: SleeveModelOptions): SleeveModel {
   root.add(backSurface);
 
   const spineSurface = new THREE.Mesh(
-    new THREE.PlaneGeometry(Math.max(0.018, thickness - 0.008), height - 0.025),
+    new THREE.PlaneGeometry(spineDimensions.width, spineDimensions.height),
     new THREE.MeshPhysicalMaterial({
       map: spineTexture,
       roughness: 0.92,
       metalness: 0,
-      side: THREE.DoubleSide,
+      side: THREE.FrontSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     }),
   );
   spineSurface.name = "spineArtwork";
   spineSurface.rotation.y = -Math.PI / 2;
-  spineSurface.position.x = -width * 0.5 - 0.0025;
+  spineSurface.position.x = -width * 0.5 - spineDimensions.surfaceOffset;
   root.add(spineSurface);
 
   const seamMaterial = new THREE.MeshStandardMaterial({

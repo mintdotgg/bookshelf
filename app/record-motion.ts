@@ -5,6 +5,19 @@ export type RecordPose = {
   scale: number;
 };
 
+export type SleeveFace = "front" | "back";
+
+export type SleeveFlipPose = {
+  yaw: number;
+  lift: number;
+  scale: number;
+};
+
+export type Axis = {
+  x: number;
+  z: number;
+};
+
 export type RecordFootprint = RecordPose & {
   id: string;
   width: number;
@@ -14,6 +27,14 @@ export type RecordFootprint = RecordPose & {
 export type MotionRecordSize = {
   width: number;
   thickness: number;
+};
+
+export type ShelvedRecordView = {
+  recordX: number;
+  slotZ: number;
+  cameraX: number;
+  cameraZ: number;
+  width: number;
 };
 
 export type RecordMotionLayout = {
@@ -35,6 +56,7 @@ export type BrowseMotionPhase =
 export const shelvedYaw = Math.PI / 2;
 export const presentedYaw = 0;
 export const recordShelfGap = 0.22;
+export const sleeveFlipDuration = 0.56;
 
 const presentedX = -0.2;
 const shelvedZ = -0.64;
@@ -79,6 +101,25 @@ function smoother(value: number) {
 
 function lerp(start: number, end: number, amount: number) {
   return start + (end - start) * amount;
+}
+
+export function sleeveFaceYaw(face: SleeveFace) {
+  return face === "back" ? Math.PI : 0;
+}
+
+export function sleeveFlipMotionPose(
+  fromYaw: number,
+  toYaw: number,
+  progress: number,
+): SleeveFlipPose {
+  const value = clamp01(progress);
+  const turn = smoother(value);
+  const arc = Math.sin(value * Math.PI);
+  return {
+    yaw: lerp(fromYaw, toYaw, turn),
+    lift: arc * 0.075,
+    scale: 1 - arc * 0.012,
+  };
 }
 
 export function createRecordMotionLayout(
@@ -132,7 +173,38 @@ export function createRecordMotionLayout(
   };
 }
 
-export function shelvedRecordPose(layout: RecordMotionLayout): RecordPose {
+export function recordSpineAnchor(
+  pose: RecordPose,
+  width: number,
+): Axis {
+  return {
+    x: pose.x - Math.cos(pose.yaw) * width * 0.5,
+    z: pose.z + Math.sin(pose.yaw) * width * 0.5,
+  };
+}
+
+export function shelvedRecordPose(
+  layout: RecordMotionLayout,
+  view?: ShelvedRecordView,
+): RecordPose {
+  if (view) {
+    const anchor = {
+      x: 0,
+      z: layout.shelvedZ + view.width * 0.5,
+    };
+    const cameraDelta = {
+      x: view.cameraX - view.recordX - anchor.x,
+      z: view.cameraZ - view.slotZ - anchor.z,
+    };
+    const yaw = Math.atan2(cameraDelta.z, -cameraDelta.x);
+    return {
+      x: anchor.x + Math.cos(yaw) * view.width * 0.5,
+      z: anchor.z - Math.sin(yaw) * view.width * 0.5,
+      yaw,
+      scale: 1,
+    };
+  }
+
   return {
     x: 0,
     z: layout.shelvedZ,
@@ -154,6 +226,7 @@ export function browseRecordMotionPose(
   phase: BrowseMotionPhase,
   progress: number,
   layout: RecordMotionLayout,
+  shelvedPose = shelvedRecordPose(layout),
 ): RecordPose {
   const t = smoother(progress);
 
@@ -174,16 +247,16 @@ export function browseRecordMotionPose(
       };
     case "shelve-current":
       return {
-        x: 0,
-        z: lerp(layout.rotationLaneZ, layout.shelvedZ, t),
-        yaw: shelvedYaw,
+        x: lerp(0, shelvedPose.x, t),
+        z: lerp(layout.rotationLaneZ, shelvedPose.z, t),
+        yaw: lerp(shelvedYaw, shelvedPose.yaw, t),
         scale: 1,
       };
     case "extract-next":
       return {
-        x: 0,
-        z: lerp(layout.shelvedZ, layout.rotationLaneZ, t),
-        yaw: shelvedYaw,
+        x: lerp(shelvedPose.x, 0, t),
+        z: lerp(shelvedPose.z, layout.rotationLaneZ, t),
+        yaw: lerp(shelvedPose.yaw, shelvedYaw, t),
         scale: 1,
       };
     case "turn-next":
@@ -227,8 +300,6 @@ export function focusedRecordPose(
     ),
   };
 }
-
-type Axis = { x: number; z: number };
 
 function dot(left: Axis, right: Axis) {
   return left.x * right.x + left.z * right.z;
@@ -335,6 +406,55 @@ export type CueMotionPose = {
   platterSpeed: number;
   stylusContact: number;
 };
+
+export type VinylPresentation =
+  | "sleeve"
+  | "moving-to-turntable"
+  | "turntable"
+  | "moving-to-sleeve";
+
+export function cueCameraTurntableMix(
+  phase: CueMotionPhase,
+  progress: number,
+) {
+  const value = smooth(clamp01(progress));
+  const handoffMix = 0.16;
+  switch (phase) {
+    case "extract-vinyl":
+      return handoffMix * value;
+    case "transport-to-turntable":
+      return lerp(handoffMix, 1, value);
+    case "lower-tonearm":
+    case "playing":
+    case "raise-tonearm":
+      return 1;
+    case "return-to-sleeve":
+      return lerp(1, handoffMix, value);
+    case "reinsert-vinyl":
+      return lerp(handoffMix, 0, value);
+  }
+}
+
+export function vinylPresentationForCue(
+  phase: CueMotionPhase | null,
+  trackTransitionActive = false,
+): VinylPresentation {
+  if (trackTransitionActive) return "turntable";
+  switch (phase) {
+    case "extract-vinyl":
+    case "transport-to-turntable":
+      return "moving-to-turntable";
+    case "lower-tonearm":
+    case "playing":
+    case "raise-tonearm":
+      return "turntable";
+    case "return-to-sleeve":
+    case "reinsert-vinyl":
+      return "moving-to-sleeve";
+    case null:
+      return "sleeve";
+  }
+}
 
 function interpolateVinylPose(
   from: VinylPose,

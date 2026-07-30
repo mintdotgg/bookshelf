@@ -11,6 +11,7 @@ import {
   browsePhaseDuration,
   browseRecordMotionPose,
   createRecordMotionLayout,
+  cueCameraTurntableMix,
   cueMotionPose,
   focusedRecordPose,
   reinsertProgressForExtraction,
@@ -18,7 +19,11 @@ import {
   recordShelfGap,
   recordFootprintsOverlap,
   shelvedRecordPose,
+  sleeveFaceYaw,
+  sleeveFlipDuration,
+  sleeveFlipMotionPose,
   trackTransitionMotionPose,
+  vinylPresentationForCue,
   type BrowseMotionPhase,
   type CueMotionLayout,
   type CueMotionPhase,
@@ -26,7 +31,9 @@ import {
   type RecordFootprint,
   type RecordMotionLayout,
   type RecordPose,
+  type SleeveFace,
   type TrackTransitionMotionPhase,
+  type VinylPresentation,
 } from "./record-motion";
 import {
   createBackCover,
@@ -38,6 +45,10 @@ import {
   createSleeveModel,
   sleeveOpeningContract,
 } from "./sleeve-model";
+import {
+  getSleeveSpineDimensions,
+  resolveSleeveDimensions,
+} from "./sleeve-spec";
 import {
   createLogBandLayout,
   smoothBandLevels,
@@ -65,6 +76,7 @@ import {
   trackGrooveProgress,
   type TrackTransitionKind,
 } from "./track-transition";
+import { artworkRetryUrl } from "./artwork-url";
 
 export type SceneMode = "browse" | "focusing" | "inspect" | "returning";
 export type VisualPlaybackMode =
@@ -80,11 +92,13 @@ export type VisualPlaybackMode =
 type EngineCallbacks = {
   onActiveIndex: (index: number) => void;
   onMode: (mode: SceneMode, selectedIndex: number | null) => void;
+  onSleeveState: (state: SleevePresentationState) => void;
   onStatus: (message: string) => void;
   onReady: () => void;
   onNeedleContact: () => void;
   onVinylReturned: () => void;
   onVinylAnchor: (anchor: VinylScreenAnchor | null) => void;
+  onVinylPresentation: (presentation: VinylPresentation) => void;
 };
 
 export type VinylScreenAnchor = {
@@ -93,12 +107,22 @@ export type VinylScreenAnchor = {
   visible: boolean;
 };
 
+export type SleevePresentationState = {
+  recordIndex: number | null;
+  face: SleeveFace;
+  flipping: boolean;
+  canFlip: boolean;
+};
+
+type ArtworkLoadState = "generated" | "loading" | "loaded" | "failed";
+
 type RuntimeRecord = {
   data: CatalogRecord;
   index: number;
   slot: THREE.Group;
   content: THREE.Group;
   inspectionIdle: THREE.Group;
+  sleeveFlipPivot: THREE.Group;
   sleeve: THREE.Group;
   sleeveMouth: THREE.Group;
   frontSurface: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshPhysicalMaterial>;
@@ -116,9 +140,21 @@ type RuntimeRecord = {
   hover: number;
   targetHover: number;
   idleAmount: number;
+  sleeveFace: SleeveFace;
+  sleeveFlipTarget: SleeveFace;
+  sleeveFlipProgress: number;
+  sleeveFlipFromYaw: number;
+  sleeveFlipToYaw: number;
+  sleeveFlipYaw: number;
+  sleeveFlipping: boolean;
+  sleeveFlipReason: SleeveFlipReason;
   activeSide: RecordSide;
   activeDiscNumber: VinylDiscNumber;
   activeTrackId: string | null;
+  surfaceTextureState: {
+    cover: ArtworkLoadState;
+    back: ArtworkLoadState;
+  };
   textures: THREE.Texture[];
 };
 
@@ -133,18 +169,25 @@ type ActiveTrackTransition = {
   presentationCommitted: boolean;
 };
 
+type SleeveFlipReason =
+  | "manual"
+  | "browse-reset"
+  | "cue"
+  | "return";
+
 export type VinylLibraryDiagnostics = ReturnType<
   RecordShelfEngine["getDiagnostics"]
 >;
 
 const clamp = THREE.MathUtils.clamp;
 const shelfTop = 0.26;
-const browseCamera = new THREE.Vector3(0, 1.55, 8.2);
-const browseTarget = new THREE.Vector3(0, 1.32, 0.1);
+const browseCamera = new THREE.Vector3(-0.38, 1.48, 9.4);
+const browseTarget = new THREE.Vector3(-0.38, 1.26, 0.1);
 const focusInDuration = 0.5;
 const focusOutDuration = 0.38;
 const sleeveOpenDuration = 0.72;
 const sleeveCloseDuration = 0.62;
+const playingCameraReturnDuration = 0.72;
 const desktopFocusX = -1.08;
 const desktopFocusZ = 1.5;
 const desktopFocusScale = 0.84;
@@ -282,6 +325,14 @@ export class RecordShelfEngine {
   private reducedMotion = false;
   private focusCameraPosition = new THREE.Vector3();
   private focusCameraTarget = new THREE.Vector3();
+  private cueCameraSleevePosition = new THREE.Vector3();
+  private cueCameraSleeveTarget = new THREE.Vector3();
+  private cueCameraReturnPosition = new THREE.Vector3();
+  private cueCameraReturnTarget = new THREE.Vector3();
+  private cueCameraTurntablePosition = new THREE.Vector3();
+  private cueCameraTurntableTarget = new THREE.Vector3();
+  private cueCameraPlatterWorld = new THREE.Vector3();
+  private cueCameraTurntableScale = new THREE.Vector3();
   private responsiveBrowseCamera = browseCamera.clone();
   private responsiveBrowseTarget = browseTarget.clone();
   private lastTimestamp = 0;
@@ -295,6 +346,10 @@ export class RecordShelfEngine {
   private cueContactFired = false;
   private vinylReturnFired = false;
   private returnAfterVinyl = false;
+  private pendingCueProgress: number | null = null;
+  private pendingReturnAfterSleeveFlip = false;
+  private lastSleeveStateKey = "";
+  private lastVinylPresentation: VinylPresentation | null = null;
   private trackTransition: ActiveTrackTransition | null = null;
   private analyserReader: ((target: Uint8Array) => boolean) | null = null;
   private analyserData = new Uint8Array(512);
@@ -364,10 +419,10 @@ export class RecordShelfEngine {
     this.scene.background = new THREE.Color(siteConfig.theme.paper);
     this.scene.fog = new THREE.Fog(siteConfig.theme.paper, 11, 25);
 
-    const hemisphere = new THREE.HemisphereLight("#fff7e5", "#51443b", 2.2);
+    const hemisphere = new THREE.HemisphereLight("#fffaf1", "#5d554d", 1.75);
     this.scene.add(hemisphere);
 
-    const key = new THREE.DirectionalLight("#fff1d8", 4.5);
+    const key = new THREE.DirectionalLight("#fff8ed", 3.4);
     key.position.set(-4.5, 7.2, 5.5);
     key.castShadow = true;
     const shadowSize = window.innerWidth < 700 ? 1024 : 2048;
@@ -381,13 +436,9 @@ export class RecordShelfEngine {
     key.shadow.bias = -0.0004;
     this.scene.add(key);
 
-    const rim = new THREE.DirectionalLight("#b9c9d8", 2.05);
+    const rim = new THREE.DirectionalLight("#e6ded2", 1.1);
     rim.position.set(5.5, 3.5, -3.5);
     this.scene.add(rim);
-
-    const amber = new THREE.PointLight("#d69a5d", 1.25, 9, 2);
-    amber.position.set(2.5, 2.1, 3.4);
-    this.scene.add(amber);
 
     const wall = new THREE.Mesh(
       new THREE.PlaneGeometry(34, 18),
@@ -420,7 +471,7 @@ export class RecordShelfEngine {
     let cursor = 0;
 
     this.recordsData.forEach((record, index) => {
-      const thickness = record.sleeveThickness ?? 0.042;
+      const { thickness } = resolveSleeveDimensions(record);
       cursor += thickness * 0.5;
       const runtime = this.createRecord(record, index, cursor);
       this.runtimeRecords.push(runtime);
@@ -461,74 +512,34 @@ export class RecordShelfEngine {
         record,
         index === 0
           ? presentedRecordPose(this.motionLayout)
-          : shelvedRecordPose(this.motionLayout),
+          : this.shelvedPoseFor(record),
         false,
       );
     });
 
     const shelfWidth = Math.max(6.2, cursor + 3.2);
     const shelfMaterial = new THREE.MeshPhysicalMaterial({
-      color: "#553a2d",
-      roughness: 0.6,
-      metalness: 0.02,
-      clearcoat: 0.12,
-      clearcoatRoughness: 0.56,
+      color: siteConfig.theme.structure,
+      roughness: 0.82,
+      metalness: 0,
     });
     const shelf = new THREE.Mesh(
-      new RoundedBoxGeometry(shelfWidth, 0.2, 1.68, 5, 0.04),
+      new RoundedBoxGeometry(shelfWidth, 0.11, 1.18, 5, 0.035),
       shelfMaterial,
     );
     shelf.name = "archiveShelf";
-    shelf.position.set(cursor * 0.5, shelfTop - 0.13, 0);
+    shelf.position.set(cursor * 0.5, shelfTop - 0.075, 0.02);
     shelf.castShadow = true;
     shelf.receiveShadow = true;
     this.shelfFurniture.add(shelf);
 
-    const brassEdge = new THREE.Mesh(
-      new RoundedBoxGeometry(shelfWidth, 0.055, 0.085, 3, 0.018),
-      new THREE.MeshPhysicalMaterial({
-        color: "#9b7848",
-        roughness: 0.34,
-        metalness: 0.74,
-      }),
-    );
-    brassEdge.position.set(cursor * 0.5, shelfTop - 0.025, 0.82);
-    brassEdge.castShadow = true;
-    this.shelfFurniture.add(brassEdge);
-
     const backRail = new THREE.Mesh(
-      new RoundedBoxGeometry(shelfWidth, 0.45, 0.12, 3, 0.025),
+      new RoundedBoxGeometry(shelfWidth, 0.13, 0.055, 3, 0.018),
       shelfMaterial,
     );
-    backRail.position.set(cursor * 0.5, shelfTop + 0.1, -0.76);
+    backRail.position.set(cursor * 0.5, shelfTop + 0.02, -0.55);
     backRail.castShadow = true;
     this.shelfFurniture.add(backRail);
-
-    const topShelf = new THREE.Mesh(
-      new RoundedBoxGeometry(shelfWidth, 0.16, 1.68, 5, 0.04),
-      shelfMaterial,
-    );
-    topShelf.name = "archiveShelfTop";
-    topShelf.position.set(cursor * 0.5, shelfTop + 2.48, 0);
-    topShelf.castShadow = true;
-    topShelf.receiveShadow = true;
-    this.shelfFurniture.add(topShelf);
-
-    const sideGeometry = new RoundedBoxGeometry(0.18, 2.5, 1.68, 5, 0.04);
-    const shelfCenter = cursor * 0.5;
-    const sideOffset = shelfWidth * 0.5 - 0.09;
-    [-1, 1].forEach((direction) => {
-      const side = new THREE.Mesh(sideGeometry, shelfMaterial);
-      side.name = direction < 0 ? "archiveShelfLeft" : "archiveShelfRight";
-      side.position.set(
-        shelfCenter + direction * sideOffset,
-        shelfTop + 1.17,
-        0,
-      );
-      side.castShadow = true;
-      side.receiveShadow = true;
-      this.shelfFurniture.add(side);
-    });
   }
 
   private createRecord(
@@ -536,9 +547,11 @@ export class RecordShelfEngine {
     index: number,
     x: number,
   ): RuntimeRecord {
-    const size = record.sleeveSize ?? 2.16;
-    const thickness = record.sleeveThickness ?? 0.042;
-    const width = size;
+    const {
+      width,
+      height: size,
+      thickness,
+    } = resolveSleeveDimensions(record);
     const slot = new THREE.Group();
     slot.name = `recordSlot:${record.id}`;
     slot.position.set(x, shelfTop + size * 0.5, 0.04);
@@ -555,12 +568,16 @@ export class RecordShelfEngine {
     inspectionIdle.name = `recordInspectionIdle:${record.id}`;
     content.add(inspectionIdle);
 
+    const sleeveFlipPivot = new THREE.Group();
+    sleeveFlipPivot.name = `recordSleeveFlip:${record.id}`;
+    inspectionIdle.add(sleeveFlipPivot);
+
     const frontTexture = toTexture(createFrontCover(record), this.renderer);
     const backTexture = toTexture(createBackCover(record), this.renderer);
     const spineTexture = toTexture(
       createSpineCover(record),
       this.renderer,
-      4,
+      8,
     );
     const initialTrack = record.tracks[0];
     const initialSide = initialTrack?.side ?? "A";
@@ -580,10 +597,14 @@ export class RecordShelfEngine {
       frontTexture,
       backTexture,
       spineTexture,
+      spineDimensions: getSleeveSpineDimensions({
+        height: size,
+        thickness,
+      }),
     });
     const sleeve = sleeveModel.root;
     sleeve.name = `recordSleeve:${record.id}`;
-    inspectionIdle.add(sleeve);
+    sleeveFlipPivot.add(sleeve);
     const {
       frontSurface,
       backSurface,
@@ -600,7 +621,7 @@ export class RecordShelfEngine {
     );
     pickProxy.name = `pick:${record.id}`;
     pickProxy.userData.recordIndex = index;
-    inspectionIdle.add(pickProxy);
+    sleeveFlipPivot.add(pickProxy);
     this.pickTargets.push(pickProxy);
 
     const vinyl = new THREE.Group();
@@ -721,6 +742,7 @@ export class RecordShelfEngine {
       slot,
       content,
       inspectionIdle,
+      sleeveFlipPivot,
       sleeve,
       sleeveMouth,
       frontSurface,
@@ -738,9 +760,21 @@ export class RecordShelfEngine {
       hover: 0,
       targetHover: 0,
       idleAmount: 0,
+      sleeveFace: "front",
+      sleeveFlipTarget: "front",
+      sleeveFlipProgress: 1,
+      sleeveFlipFromYaw: 0,
+      sleeveFlipToYaw: 0,
+      sleeveFlipYaw: 0,
+      sleeveFlipping: false,
+      sleeveFlipReason: "manual",
       activeSide: initialSide,
       activeDiscNumber: initialDiscNumber,
       activeTrackId: initialTrack?.id ?? null,
+      surfaceTextureState: {
+        cover: record.coverImage ? "loading" : "generated",
+        back: record.backCoverImage ? "loading" : "generated",
+      },
       textures,
     };
   }
@@ -949,8 +983,22 @@ export class RecordShelfEngine {
       this.resetFocusView();
       return;
     }
+    if (
+      (event.key === "f" || event.key === "F") &&
+      !this.isNativeActivationTarget(event.target)
+    ) {
+      if (this.toggleSleeveFace()) event.preventDefault();
+      return;
+    }
     if (this.mode !== "browse") return;
-    if (event.key === "ArrowRight") {
+    const jumpToShelfEdge = event.metaKey || event.ctrlKey;
+    if (jumpToShelfEdge && event.key === "ArrowRight") {
+      event.preventDefault();
+      this.browseTo(this.runtimeRecords.length - 1);
+    } else if (jumpToShelfEdge && event.key === "ArrowLeft") {
+      event.preventDefault();
+      this.browseTo(0);
+    } else if (event.key === "ArrowRight") {
       event.preventDefault();
       this.browseBy(1);
     } else if (event.key === "ArrowLeft") {
@@ -1002,6 +1050,29 @@ export class RecordShelfEngine {
       this.runtimeRecords[upper]?.x ?? 0,
       fraction,
     );
+  }
+
+  private shelvedPoseFor(record: RuntimeRecord) {
+    return shelvedRecordPose(this.motionLayout, {
+      recordX: record.x,
+      slotZ: record.slot.position.z,
+      cameraX: this.responsiveBrowseCamera.x - this.shelfGroup.position.x,
+      cameraZ: this.responsiveBrowseCamera.z,
+      width: record.width,
+    });
+  }
+
+  private updateShelvedRecordPoses() {
+    this.runtimeRecords.forEach((record) => {
+      if (
+        record.index === this.selectedIndex ||
+        record.index === this.presentedIndex ||
+        record.index === this.motionRecordIndex
+      ) {
+        return;
+      }
+      this.commitRecordPose(record, this.shelvedPoseFor(record), false);
+    });
   }
 
   private footprintFor(
@@ -1085,6 +1156,21 @@ export class RecordShelfEngine {
         }
         return;
       }
+      if (this.presentedIndex !== null) {
+        const presented = this.runtimeRecords[this.presentedIndex];
+        if (
+          presented.sleeveFace !== "front" ||
+          presented.sleeveFlipping
+        ) {
+          if (
+            !presented.sleeveFlipping ||
+            presented.sleeveFlipTarget !== "front"
+          ) {
+            this.beginSleeveFlip(presented, "front", "browse-reset");
+          }
+          return;
+        }
+      }
       this.motionRecordIndex = this.presentedIndex;
       this.browseMotionPhase =
         this.motionRecordIndex === null ? "extract-next" : "retreat-current";
@@ -1110,6 +1196,7 @@ export class RecordShelfEngine {
       phase,
       nextProgress,
       this.motionLayout,
+      this.shelvedPoseFor(movingRecord),
     );
     if (!this.commitRecordPose(movingRecord, proposedPose)) return;
 
@@ -1159,7 +1246,9 @@ export class RecordShelfEngine {
     this.updateState(delta, timestamp);
     this.updateRecords(delta);
     this.updateCue(delta);
+    this.emitVinylPresentation();
     this.updateAudioVisuals(delta);
+    this.emitSleeveState();
     if (this.controls.enabled) this.controls.update();
     this.renderer.render(this.scene, this.camera);
     this.updateVinylAnchor();
@@ -1215,6 +1304,8 @@ export class RecordShelfEngine {
           );
         }
       }
+    } else if (this.mode === "inspect" && this.cuePhase !== null) {
+      this.updateCueCamera(delta);
     } else if (this.mode === "returning") {
       this.controls.enabled = false;
       const previousSleeveReveal = this.sleeveRevealProgress;
@@ -1282,8 +1373,15 @@ export class RecordShelfEngine {
     if (nextActive !== this.activeIndex) {
       this.activeIndex = nextActive;
       this.callbacks.onActiveIndex(this.activeIndex);
+      const activeRecord = this.runtimeRecords[this.activeIndex];
+      if (activeRecord.surfaceTextureState.cover === "failed") {
+        this.callbacks.onStatus(
+          `Using generated artwork for ${activeRecord.data.shortTitle}`,
+        );
+      }
     }
     this.shelfGroup.position.x = -this.xAtIndex(this.scrollIndex);
+    this.updateShelvedRecordPoses();
     if (this.mode === "browse") this.updateBrowseMotion(delta);
   }
 
@@ -1331,6 +1429,7 @@ export class RecordShelfEngine {
       record.idleAmount = damp(record.idleAmount, idleTarget, 5, delta);
       record.inspectionIdle.position.y = 0;
       record.inspectionIdle.rotation.set(0, 0, 0);
+      this.updateSleeveFlip(record, delta);
       const mouthOpen = isSelected ? smooth(this.sleeveRevealProgress) : 0;
       record.sleeveMouth.scale.z = 1 + mouthOpen * 0.72;
       record.sleeveMouth.rotation.y = -mouthOpen * 0.014;
@@ -1340,6 +1439,160 @@ export class RecordShelfEngine {
       const hoverScale = 1 + record.hover * 0.008;
       if (!isSelected) record.content.scale.setScalar(record.pose.scale * hoverScale);
     });
+  }
+
+  private currentSleeveRecord() {
+    const index =
+      this.mode === "browse" ? this.activeIndex : this.selectedIndex;
+    return index === null ? null : this.runtimeRecords[index] ?? null;
+  }
+
+  private canFlipSleeve(record = this.currentSleeveRecord()) {
+    if (!record || record.sleeveFlipping) return false;
+    if (this.mode === "browse") {
+      return (
+        this.presentedIndex === this.activeIndex &&
+        record.index === this.activeIndex &&
+        this.browseMotionPhase === "idle" &&
+        this.pendingFocusIndex === null
+      );
+    }
+    if (this.mode !== "inspect" || record.index !== this.selectedIndex) {
+      return false;
+    }
+    if (
+      this.trackTransition !== null ||
+      this.pendingCueProgress !== null ||
+      this.pendingReturnAfterSleeveFlip
+    ) {
+      return false;
+    }
+    if (this.cuePhase !== null && this.cuePhase !== "playing") return false;
+    return (
+      this.playbackMode !== "loading" &&
+      this.playbackMode !== "cueing" &&
+      this.playbackMode !== "seeking" &&
+      this.playbackMode !== "stopping"
+    );
+  }
+
+  private beginSleeveFlip(
+    record: RuntimeRecord,
+    target: SleeveFace,
+    reason: SleeveFlipReason,
+  ) {
+    if (
+      record.sleeveFlipping &&
+      record.sleeveFlipTarget === target
+    ) {
+      record.sleeveFlipReason = reason;
+      return false;
+    }
+    if (!record.sleeveFlipping && record.sleeveFace === target) return false;
+
+    let targetYaw = sleeveFaceYaw(target);
+    while (targetYaw - record.sleeveFlipYaw > Math.PI) {
+      targetYaw -= Math.PI * 2;
+    }
+    while (targetYaw - record.sleeveFlipYaw < -Math.PI) {
+      targetYaw += Math.PI * 2;
+    }
+
+    record.sleeveFlipFromYaw = record.sleeveFlipYaw;
+    record.sleeveFlipToYaw = targetYaw;
+    record.sleeveFlipTarget = target;
+    record.sleeveFlipProgress = 0;
+    record.sleeveFlipping = true;
+    record.sleeveFlipReason = reason;
+    return true;
+  }
+
+  private updateSleeveFlip(record: RuntimeRecord, delta: number) {
+    if (record.sleeveFlipping) {
+      const duration = this.reducedMotion ? 0.08 : sleeveFlipDuration;
+      record.sleeveFlipProgress = clamp(
+        record.sleeveFlipProgress + delta / duration,
+        0,
+        1,
+      );
+    }
+
+    const pose = record.sleeveFlipping
+      ? sleeveFlipMotionPose(
+          record.sleeveFlipFromYaw,
+          record.sleeveFlipToYaw,
+          record.sleeveFlipProgress,
+        )
+      : {
+          yaw: sleeveFaceYaw(record.sleeveFace),
+          lift: 0,
+          scale: 1,
+        };
+    record.sleeveFlipYaw = pose.yaw;
+    record.sleeveFlipPivot.rotation.y = pose.yaw;
+    record.sleeveFlipPivot.position.y = pose.lift;
+    record.sleeveFlipPivot.scale.setScalar(pose.scale);
+
+    if (!record.sleeveFlipping || record.sleeveFlipProgress < 1) return;
+
+    const reason = record.sleeveFlipReason;
+    record.sleeveFace = record.sleeveFlipTarget;
+    record.sleeveFlipping = false;
+    record.sleeveFlipProgress = 1;
+    record.sleeveFlipYaw = sleeveFaceYaw(record.sleeveFace);
+    record.sleeveFlipFromYaw = record.sleeveFlipYaw;
+    record.sleeveFlipToYaw = record.sleeveFlipYaw;
+    record.sleeveFlipPivot.rotation.y = record.sleeveFlipYaw;
+    record.sleeveFlipPivot.position.y = 0;
+    record.sleeveFlipPivot.scale.setScalar(1);
+
+    if (reason === "manual") {
+      this.callbacks.onStatus(
+        `${record.sleeveFace === "back" ? "Back" : "Front"} cover of ${
+          record.data.shortTitle
+        }`,
+      );
+    }
+    if (
+      record.index === this.selectedIndex &&
+      record.sleeveFace === "front" &&
+      this.pendingCueProgress !== null
+    ) {
+      const trackProgress = this.pendingCueProgress;
+      this.pendingCueProgress = null;
+      this.beginCue(trackProgress);
+    }
+    if (
+      record.index === this.selectedIndex &&
+      record.sleeveFace === "front" &&
+      this.pendingReturnAfterSleeveFlip
+    ) {
+      this.pendingReturnAfterSleeveFlip = false;
+      this.beginReturnToShelf();
+    }
+  }
+
+  private getSleevePresentationState(): SleevePresentationState {
+    const record = this.currentSleeveRecord();
+    return {
+      recordIndex: record?.index ?? null,
+      face: record?.sleeveFace ?? "front",
+      flipping: record?.sleeveFlipping ?? false,
+      canFlip: this.canFlipSleeve(record),
+    };
+  }
+
+  private emitSleeveState() {
+    const state = this.getSleevePresentationState();
+    const key = [
+      state.recordIndex ?? "none",
+      state.face,
+      state.flipping,
+      state.canFlip,
+    ].join(":");
+    if (key === this.lastSleeveStateKey) return;
+    this.lastSleeveStateKey = key;
+    this.callbacks.onSleeveState(state);
   }
 
   private cueLayout(): CueMotionLayout | null {
@@ -1445,7 +1698,10 @@ export class RecordShelfEngine {
 
     if (this.cuePhase === null) {
       selected.vinyl.visible =
-        this.mode !== "browse" && this.sleeveRevealProgress > 0;
+        this.mode !== "browse" &&
+        this.sleeveRevealProgress > 0 &&
+        selected.sleeveFace === "front" &&
+        !selected.sleeveFlipping;
       if (selected.vinyl.visible) {
         const peek = cueMotionPose(
           "extract-vinyl",
@@ -1517,6 +1773,9 @@ export class RecordShelfEngine {
         break;
       case "lower-tonearm":
         this.cuePhase = "playing";
+        this.cueCameraReturnPosition.copy(this.camera.position);
+        this.cueCameraReturnTarget.copy(this.controls.target);
+        this.controls.enabled = false;
         this.cueContactFired = true;
         this.callbacks.onNeedleContact();
         break;
@@ -1661,9 +1920,10 @@ export class RecordShelfEngine {
     this.grooveProgress = transition.toGrooveProgress;
     this.trackTransition = null;
     this.cuePhase = "playing";
-    this.cueProgress = 0;
+    this.cueProgress = 1;
     this.cueContactFired = needleContact;
-    this.controls.enabled = this.mode === "inspect";
+    this.controls.enabled =
+      this.mode === "inspect" && !selected.sleeveFlipping;
     if (needleContact) this.callbacks.onNeedleContact();
   }
 
@@ -1752,6 +2012,101 @@ export class RecordShelfEngine {
       1 - Math.exp(-(this.reducedMotion ? 28 : 13) * delta),
     );
     this.camera.lookAt(this.focusCameraTarget);
+  }
+
+  private frameTurntableCamera() {
+    this.platter.getWorldPosition(this.cueCameraPlatterWorld);
+    const turntableScale = this.turntable.getWorldScale(
+      this.cueCameraTurntableScale,
+    ).x;
+    const mobile = this.isMobile();
+    this.cueCameraTurntableTarget.set(
+      this.cueCameraPlatterWorld.x +
+        turntableScale * (mobile ? 0.12 : 0.28),
+      this.cueCameraPlatterWorld.y + turntableScale * 0.1,
+      this.cueCameraPlatterWorld.z,
+    );
+    this.cueCameraTurntablePosition.set(
+      this.cueCameraTurntableTarget.x - (mobile ? 0.28 : 0.58),
+      this.cueCameraTurntableTarget.y + (mobile ? 1.9 : 2.75),
+      this.cueCameraTurntableTarget.z + (mobile ? 4.2 : 5.15),
+    );
+  }
+
+  private updateCueCamera(delta: number) {
+    const phase = this.cuePhase;
+    if (!phase) return;
+    if (phase === "playing") {
+      if (this.cueProgress >= 1) return;
+      this.cueProgress = clamp(
+        this.cueProgress +
+          delta / (this.reducedMotion ? 0.08 : playingCameraReturnDuration),
+        0,
+        1,
+      );
+      const returnProgress = smooth(this.cueProgress);
+      this.camera.position.lerpVectors(
+        this.cueCameraReturnPosition,
+        this.cueCameraSleevePosition,
+        returnProgress,
+      );
+      this.controls.target.lerpVectors(
+        this.cueCameraReturnTarget,
+        this.cueCameraSleeveTarget,
+        returnProgress,
+      );
+      this.camera.lookAt(this.controls.target);
+      this.applyFocusViewOffset(returnProgress);
+      if (this.cueProgress >= 1 && this.selectedIndex !== null) {
+        const selected = this.runtimeRecords[this.selectedIndex];
+        this.controls.enabled =
+          this.mode === "inspect" && !selected.sleeveFlipping;
+      }
+      return;
+    }
+    const phaseProgress =
+      phase === "extract-vinyl"
+        ? clamp(
+            (this.cueProgress - idleVinylReveal) /
+              Math.max(0.001, 1 - idleVinylReveal),
+            0,
+            1,
+          )
+        : this.cueProgress;
+    const mix = cueCameraTurntableMix(phase, phaseProgress);
+    const returning =
+      phase === "raise-tonearm" ||
+      phase === "return-to-sleeve" ||
+      phase === "reinsert-vinyl";
+    if (!returning) this.frameTurntableCamera();
+    const turntablePosition = returning
+      ? this.cueCameraReturnPosition
+      : this.cueCameraTurntablePosition;
+    const turntableTarget = returning
+      ? this.cueCameraReturnTarget
+      : this.cueCameraTurntableTarget;
+    this.camera.position.lerpVectors(
+      this.cueCameraSleevePosition,
+      turntablePosition,
+      mix,
+    );
+    this.controls.target.lerpVectors(
+      this.cueCameraSleeveTarget,
+      turntableTarget,
+      mix,
+    );
+    this.camera.lookAt(this.controls.target);
+    this.applyFocusViewOffset(1 - mix);
+  }
+
+  private emitVinylPresentation() {
+    const presentation = vinylPresentationForCue(
+      this.cuePhase,
+      this.trackTransition !== null,
+    );
+    if (presentation === this.lastVinylPresentation) return;
+    this.lastVinylPresentation = presentation;
+    this.callbacks.onVinylPresentation(presentation);
   }
 
   private frameFocusedRecord(
@@ -1848,6 +2203,7 @@ export class RecordShelfEngine {
     this.turntable.scale.setScalar(
       width < 760 ? 0.36 : width < 980 ? 0.55 : 0.62,
     );
+    this.updateShelvedRecordPoses();
     if (this.mode === "browse" && this.focusProgress < 0.01) {
       this.camera.clearViewOffset();
       this.camera.position.copy(this.responsiveBrowseCamera);
@@ -1858,6 +2214,15 @@ export class RecordShelfEngine {
         worldPosition,
       );
       this.frameFocusedRecord(worldPosition);
+      this.camera.position.copy(this.focusCameraPosition);
+      this.controls.target.copy(this.focusCameraTarget);
+      this.camera.lookAt(this.controls.target);
+      if (this.cuePhase === "playing") {
+        this.cueProgress = 1;
+        const selected = this.runtimeRecords[this.selectedIndex];
+        this.controls.enabled =
+          this.trackTransition === null && !selected.sleeveFlipping;
+      }
     }
   };
 
@@ -1869,14 +2234,25 @@ export class RecordShelfEngine {
     runtime: RuntimeRecord,
     surface: RuntimeRecord["frontSurface"] | RuntimeRecord["backSurface"],
     url: string,
-    kind: string,
+    kind: "cover" | "back",
   ) {
+    runtime.surfaceTextureState[kind] = "loading";
+    const loader = new THREE.TextureLoader();
+    loader.setCrossOrigin("anonymous");
+    let texture: THREE.Texture;
     try {
-      const texture = await new THREE.TextureLoader().loadAsync(url);
+      try {
+        texture = await loader.loadAsync(url);
+      } catch {
+        if (this.isDisposed) return;
+        texture = await loader.loadAsync(artworkRetryUrl(url));
+      }
+
       if (this.isDisposed) {
         texture.dispose();
         return;
       }
+      runtime.surfaceTextureState[kind] = "loaded";
       texture.name = `${kind}:${runtime.data.id}`;
       texture.colorSpace = THREE.SRGBColorSpace;
       texture.anisotropy = Math.min(
@@ -1886,12 +2262,25 @@ export class RecordShelfEngine {
       const previous = surface.material.map;
       surface.material.map = texture;
       surface.material.needsUpdate = true;
-      runtime.textures.push(texture);
+      const previousIndex = previous
+        ? runtime.textures.indexOf(previous)
+        : -1;
+      if (previousIndex >= 0) {
+        runtime.textures.splice(previousIndex, 1, texture);
+      } else {
+        runtime.textures.push(texture);
+      }
       previous?.dispose();
     } catch {
-      this.callbacks.onStatus(
-        `Using generated artwork for ${runtime.data.shortTitle}`,
-      );
+      if (this.isDisposed) return;
+      runtime.surfaceTextureState[kind] = "failed";
+      const currentIndex =
+        this.mode === "browse" ? this.activeIndex : this.selectedIndex;
+      if (runtime.index === currentIndex) {
+        this.callbacks.onStatus(
+          `Using generated artwork for ${runtime.data.shortTitle}`,
+        );
+      }
     }
   }
 
@@ -1930,6 +2319,9 @@ export class RecordShelfEngine {
       diagnostics.trackTransitionPhase ?? "idle";
     this.canvas.dataset.sceneMode = diagnostics.sceneMode;
     this.canvas.dataset.playbackMode = diagnostics.playbackMode;
+    this.canvas.dataset.sleeveFace = diagnostics.sleeveFace;
+    this.canvas.dataset.sleeveFlipPhase = diagnostics.sleeveFlipPhase;
+    this.canvas.dataset.canFlipSleeve = String(diagnostics.canFlipSleeve);
     this.canvas.dataset.turntableVariant = diagnostics.turntableVariantId;
     this.canvas.dataset.collisionFree = String(
       diagnostics.currentCollision === null,
@@ -1992,6 +2384,17 @@ export class RecordShelfEngine {
     }
   }
 
+  toggleSleeveFace() {
+    const record = this.currentSleeveRecord();
+    if (!this.canFlipSleeve(record) || !record) return false;
+    const target = record.sleeveFace === "front" ? "back" : "front";
+    this.beginSleeveFlip(record, target, "manual");
+    this.callbacks.onStatus(
+      `Turning ${record.data.shortTitle} to the ${target} cover`,
+    );
+    return true;
+  }
+
   startCue(trackProgress = 0) {
     if (
       this.mode !== "inspect" ||
@@ -2001,7 +2404,26 @@ export class RecordShelfEngine {
       return false;
     }
     if (this.cuePhase === "playing") return true;
+    const runtime = this.runtimeRecords[this.selectedIndex];
+    if (runtime.sleeveFace !== "front" || runtime.sleeveFlipping) {
+      this.controls.enabled = false;
+      this.pendingCueProgress = clamp(trackProgress, 0, 1);
+      this.playbackMode = "cueing";
+      this.beginSleeveFlip(runtime, "front", "cue");
+      this.callbacks.onStatus("Turning the sleeve front before cueing");
+      return true;
+    }
+    return this.beginCue(trackProgress);
+  }
+
+  private beginCue(trackProgress = 0) {
+    if (this.mode !== "inspect" || this.selectedIndex === null) return false;
     this.controls.enabled = false;
+    this.cueCameraSleevePosition.copy(this.camera.position);
+    this.cueCameraSleeveTarget.copy(this.controls.target);
+    this.frameTurntableCamera();
+    this.cueCameraReturnPosition.copy(this.cueCameraTurntablePosition);
+    this.cueCameraReturnTarget.copy(this.cueCameraTurntableTarget);
     this.cuePhase = "extract-vinyl";
     this.cueProgress = idleVinylReveal;
     this.sleeveRevealProgress = 1;
@@ -2020,6 +2442,7 @@ export class RecordShelfEngine {
   }
 
   stopAndReturnVinyl(returnToShelf = false) {
+    this.pendingCueProgress = null;
     this.returnAfterVinyl ||= returnToShelf;
     if (this.trackTransition) {
       this.completeTrackTransition(false);
@@ -2031,6 +2454,14 @@ export class RecordShelfEngine {
         this.callbacks.onVinylReturned();
       }
       return;
+    }
+    this.cueCameraReturnPosition.copy(this.camera.position);
+    this.cueCameraReturnTarget.copy(this.controls.target);
+    if (this.selectedIndex !== null) {
+      const selected = this.runtimeRecords[this.selectedIndex];
+      if (selected.sleeveFace !== "front" || selected.sleeveFlipping) {
+        this.beginSleeveFlip(selected, "front", "return");
+      }
     }
     this.controls.enabled = false;
     this.playbackMode = "stopping";
@@ -2054,7 +2485,14 @@ export class RecordShelfEngine {
   setPlaybackMode(mode: VisualPlaybackMode) {
     this.playbackMode = mode;
     if (mode === "playing") {
-      this.controls.enabled = this.mode === "inspect";
+      const selected =
+        this.selectedIndex === null
+          ? null
+          : this.runtimeRecords[this.selectedIndex];
+      this.controls.enabled =
+        this.mode === "inspect" &&
+        !selected?.sleeveFlipping &&
+        (this.cuePhase !== "playing" || this.cueProgress >= 1);
     }
   }
 
@@ -2068,6 +2506,7 @@ export class RecordShelfEngine {
       return null;
     }
     const runtime = this.runtimeRecords[this.selectedIndex];
+    if (runtime.sleeveFlipping) return null;
     const targetTrack = runtime.data.tracks.find(
       (candidate) => candidate.id === track.id,
     );
@@ -2122,7 +2561,12 @@ export class RecordShelfEngine {
   holdNeedleAfterPlaybackError() {
     if (this.cuePhase !== "playing") return false;
     this.playbackMode = "error";
-    this.controls.enabled = this.mode === "inspect";
+    const selected =
+      this.selectedIndex === null
+        ? null
+        : this.runtimeRecords[this.selectedIndex];
+    this.controls.enabled =
+      this.mode === "inspect" && !selected?.sleeveFlipping;
     return true;
   }
 
@@ -2215,6 +2659,16 @@ export class RecordShelfEngine {
 
   private beginReturnToShelf() {
     if (this.mode === "browse" || this.mode === "returning") return;
+    if (this.selectedIndex !== null) {
+      const selected = this.runtimeRecords[this.selectedIndex];
+      if (selected.sleeveFace !== "front" || selected.sleeveFlipping) {
+        this.pendingReturnAfterSleeveFlip = true;
+        this.controls.enabled = false;
+        this.beginSleeveFlip(selected, "front", "return");
+        this.callbacks.onStatus("Turning the sleeve front before returning it");
+        return;
+      }
+    }
     this.controls.enabled = false;
     this.mode = "returning";
     this.callbacks.onMode(this.mode, this.selectedIndex);
@@ -2233,11 +2687,17 @@ export class RecordShelfEngine {
     this.frameFocusedRecord(worldPosition);
     this.controls.target.copy(this.focusCameraTarget);
     this.camera.position.copy(this.focusCameraPosition);
+    if (this.cuePhase === "playing") {
+      this.cueProgress = 1;
+      this.controls.enabled =
+        this.trackTransition === null && !selected.sleeveFlipping;
+    }
     this.controls.update();
   }
 
   getDiagnostics() {
     const info = this.renderer.info;
+    const sleeveState = this.getSleevePresentationState();
     return {
       sceneMode: this.mode,
       playbackMode: this.playbackMode,
@@ -2252,6 +2712,11 @@ export class RecordShelfEngine {
           ? null
           : this.runtimeRecords[this.selectedIndex].activeSide,
       records: this.runtimeRecords.length,
+      artwork: this.runtimeRecords.map((record) => ({
+        id: record.data.id,
+        cover: record.surfaceTextureState.cover,
+        back: record.surfaceTextureState.back,
+      })),
       drawCalls: info.render.calls,
       triangles: info.render.triangles,
       geometries: info.memory.geometries,
@@ -2259,9 +2724,18 @@ export class RecordShelfEngine {
       pixelRatio: this.renderer.getPixelRatio(),
       motionPhase: this.browseMotionPhase,
       cuePhase: this.cuePhase,
+      vinylPresentation: vinylPresentationForCue(
+        this.cuePhase,
+        this.trackTransition !== null,
+      ),
       cueProgress: this.cueProgress,
       trackTransitionKind: this.trackTransition?.kind ?? null,
       trackTransitionPhase: this.trackTransition?.phase ?? null,
+      sleeveFace: sleeveState.face,
+      sleeveFlipPhase: sleeveState.flipping
+        ? `to-${this.currentSleeveRecord()?.sleeveFlipTarget ?? "front"}`
+        : "idle",
+      canFlipSleeve: sleeveState.canFlip,
       sleeveRevealProgress: this.sleeveRevealProgress,
       collisionRejects: this.collisionRejects,
       lastCollisionPair: this.lastCollisionPair,

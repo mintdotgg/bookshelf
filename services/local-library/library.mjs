@@ -10,11 +10,17 @@ export const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 const YT_DLP_TIMEOUT_MS = 15 * 60 * 1000;
 const YT_DLP_SEARCH_TIMEOUT_MS = 45 * 1000;
 const YT_DLP_PREFLIGHT_TIMEOUT_MS = 15 * 1000;
+const YT_DLP_SOCKET_TIMEOUT_SECONDS = 45;
+const YT_DLP_FALLBACK_SOCKET_TIMEOUT_SECONDS = 60;
+const YT_DLP_DOWNLOAD_RETRIES = 10;
 const MAX_PROCESS_OUTPUT_BYTES = 64 * 1024;
 const MAX_SEARCH_OUTPUT_BYTES = 1024 * 1024;
 const YOUTUBE_MATCH_LIMIT = 8;
 const YOUTUBE_MATCH_CONCURRENCY = 5;
 const AUTO_VERIFY_CONFIDENCE = 0.72;
+const SPOTIFY_REQUEST_TIMEOUT_MS = 12_000;
+const SPOTIFY_RETRY_DELAYS_MS = [250, 750];
+const MAX_SPOTIFY_RETRY_DELAY_MS = 2_000;
 
 const recordMotifs = [
   "signal-bloom",
@@ -44,6 +50,7 @@ const imageExtensions = new Map([
   ["image/webp", "webp"],
   ["image/avif", "avif"],
 ]);
+const imageFileExtensions = new Set(imageExtensions.values());
 
 const audioExtensions = new Set([
   "mp3",
@@ -77,6 +84,31 @@ export class LocalLibraryError extends Error {
     this.status = status;
     this.details = details;
   }
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function spotifyRetryDelay(response, fallback) {
+  const retryAfter = response.headers.get("retry-after");
+  if (!retryAfter) return fallback;
+  const seconds = Number(retryAfter);
+  const requestedDelay = Number.isFinite(seconds)
+    ? seconds * 1000
+    : Date.parse(retryAfter) - Date.now();
+  if (!Number.isFinite(requestedDelay)) return fallback;
+  return Math.min(
+    MAX_SPOTIFY_RETRY_DELAY_MS,
+    Math.max(0, requestedDelay),
+  );
+}
+
+function spotifyNetworkFailureReason(error) {
+  const causeCode = error?.cause?.code;
+  if (typeof causeCode === "string" && causeCode) return causeCode;
+  if (typeof error?.name === "string" && error.name) return error.name;
+  return "NETWORK_ERROR";
 }
 
 function hashNumber(value) {
@@ -210,13 +242,27 @@ export function buildYtDlpArgs({
   ffmpegLocation = "",
   jsRuntime = "",
   forceIpv4 = false,
+  networkFallback = false,
 }) {
+  const socketTimeoutSeconds = networkFallback
+    ? YT_DLP_FALLBACK_SOCKET_TIMEOUT_SECONDS
+    : YT_DLP_SOCKET_TIMEOUT_SECONDS;
   const args = [
     "--ignore-config",
     "--no-cache-dir",
     "--no-playlist",
     "--no-progress",
     "--newline",
+    "--socket-timeout",
+    String(socketTimeoutSeconds),
+    "--retries",
+    String(YT_DLP_DOWNLOAD_RETRIES),
+    "--fragment-retries",
+    String(YT_DLP_DOWNLOAD_RETRIES),
+    "--retry-sleep",
+    "http:exp=1:20",
+    "--retry-sleep",
+    "fragment:exp=1:20",
     "--format",
     "bestaudio/best",
     "--extract-audio",
@@ -303,6 +349,19 @@ export function classifyYtDlpFailure(stderr) {
     };
   }
   if (
+    lowered.includes("read timed out") ||
+    lowered.includes("read timeout") ||
+    lowered.includes("connection timed out") ||
+    lowered.includes("the read operation timed out")
+  ) {
+    return {
+      code: "YT_DLP_NETWORK_TIMEOUT",
+      message:
+        "The YouTube media server stopped responding after yt-dlp exhausted 10 retries.",
+      retryableWithIpv4: true,
+    };
+  }
+  if (
     lowered.includes("no supported javascript runtime") ||
     lowered.includes("js challenge providers") && lowered.includes("unavailable")
   ) {
@@ -360,17 +419,40 @@ export function classifyYtDlpFailure(stderr) {
   };
 }
 
-export async function runWithForbiddenRetry(operation) {
+export async function runWithYtDlpFallback(operation) {
   try {
-    return await operation({ attempt: 1, forceIpv4: false });
+    return await operation({
+      attempt: 1,
+      forceIpv4: false,
+      networkFallback: false,
+    });
   } catch (error) {
     if (
       !(error instanceof LocalLibraryError) ||
-      error.code !== "YT_DLP_FORBIDDEN"
+      !["YT_DLP_FORBIDDEN", "YT_DLP_NETWORK_TIMEOUT"].includes(error.code)
     ) {
       throw error;
     }
-    return operation({ attempt: 2, forceIpv4: true });
+    try {
+      return await operation({
+        attempt: 2,
+        forceIpv4: true,
+        networkFallback: error.code === "YT_DLP_NETWORK_TIMEOUT",
+      });
+    } catch (fallbackError) {
+      if (
+        fallbackError instanceof LocalLibraryError &&
+        fallbackError.code === "YT_DLP_NETWORK_TIMEOUT"
+      ) {
+        throw new LocalLibraryError(
+          "YT_DLP_NETWORK_TIMEOUT",
+          "The YouTube media server timed out during both the standard and IPv4 fallback downloads. Check the connection or try again later.",
+          504,
+          { attempts: 2, usedIpv4Fallback: true },
+        );
+      }
+      throw fallbackError;
+    }
   }
 }
 
@@ -493,6 +575,7 @@ async function executeYtDlpOnce({
   ffmpegPath,
   jsRuntime,
   forceIpv4,
+  networkFallback,
 }) {
   const args = buildYtDlpArgs({
     youtubeUrl,
@@ -500,6 +583,7 @@ async function executeYtDlpOnce({
     ffmpegLocation: ffmpegPath,
     jsRuntime,
     forceIpv4,
+    networkFallback,
   });
 
   await new Promise((resolve, reject) => {
@@ -557,8 +641,10 @@ async function executeYtDlpOnce({
           new LocalLibraryError(
             failure.code,
             failure.message,
-            502,
-            { retryableWithIpv4: failure.retryableWithIpv4 },
+            failure.code === "YT_DLP_NETWORK_TIMEOUT" ? 504 : 502,
+            {
+              retryableWithIpv4: failure.retryableWithIpv4,
+            },
           ),
         );
       });
@@ -573,10 +659,11 @@ async function executeYtDlpOnce({
 }
 
 async function executeYtDlp(input) {
-  return runWithForbiddenRetry(({ forceIpv4 }) =>
+  return runWithYtDlpFallback(({ forceIpv4, networkFallback }) =>
     executeYtDlpOnce({
       ...input,
       forceIpv4,
+      networkFallback,
     }),
   );
 }
@@ -871,7 +958,17 @@ function normalizeTrack(track, index, albumFallback = undefined) {
 }
 
 async function readResponseJson(response, label) {
-  if (response.ok) return response.json();
+  if (response.ok) {
+    try {
+      return await response.json();
+    } catch {
+      throw new LocalLibraryError(
+        "SPOTIFY_INVALID_RESPONSE",
+        `${label} returned an invalid response. Try the import again.`,
+        502,
+      );
+    }
+  }
   let detail = "";
   try {
     const body = await response.json();
@@ -1053,6 +1150,9 @@ export function buildVirtualRecords(source) {
       rpm: source.reference.type === "track" ? 45 : 33.333,
       discCount: sides.length > 2 ? 2 : 1,
       coverFile: null,
+      coverUpdatedAt: null,
+      coverBytes: null,
+      coverContentType: null,
       tracks: recordTracks,
       links: [
         {
@@ -1083,6 +1183,44 @@ async function writeJsonAtomic(file, value, mode = undefined) {
   await fs.rename(temporary, file);
 }
 
+export function reconcileCatalogOrder(storedOrder, availableIds) {
+  const available = [
+    ...new Set(
+      availableIds.filter(
+        (recordId) => typeof recordId === "string" && recordId.length > 0,
+      ),
+    ),
+  ];
+  const availableSet = new Set(available);
+  const seen = new Set();
+  const reconciled = [];
+  for (const recordId of Array.isArray(storedOrder) ? storedOrder : []) {
+    if (
+      typeof recordId !== "string" ||
+      seen.has(recordId) ||
+      !availableSet.has(recordId)
+    ) {
+      continue;
+    }
+    seen.add(recordId);
+    reconciled.push(recordId);
+  }
+  for (const recordId of available) {
+    if (seen.has(recordId)) continue;
+    seen.add(recordId);
+    reconciled.push(recordId);
+  }
+  return reconciled;
+}
+
+function sameStringOrder(left, right) {
+  return (
+    Array.isArray(left) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 async function copyResponseToFile(response, file, maxBytes) {
   const contentLength = Number(response.headers.get("content-length") ?? 0);
   if (contentLength > maxBytes) {
@@ -1101,6 +1239,109 @@ async function copyResponseToFile(response, file, maxBytes) {
     );
   }
   await fs.writeFile(file, buffer);
+}
+
+async function validateImageSignature(file, extension) {
+  const handle = await fs.open(file, "r");
+  const header = Buffer.alloc(16);
+  let bytesRead = 0;
+  try {
+    ({ bytesRead } = await handle.read(header, 0, header.length, 0));
+  } finally {
+    await handle.close();
+  }
+  if (bytesRead < 12) return false;
+
+  switch (extension) {
+    case "jpg":
+      return header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff;
+    case "png":
+      return header
+        .subarray(0, 8)
+        .equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    case "webp":
+      return (
+        header.toString("ascii", 0, 4) === "RIFF" &&
+        header.toString("ascii", 8, 12) === "WEBP"
+      );
+    case "avif":
+      return header.toString("ascii", 4, 8) === "ftyp";
+    default:
+      return false;
+  }
+}
+
+async function reconcileManifestCover(recordDirectory, manifest) {
+  if (!manifest.coverFile) return { manifest, changed: false };
+
+  const coverFile = String(manifest.coverFile);
+  const extension = path.extname(coverFile).slice(1).toLowerCase();
+  if (
+    path.basename(coverFile) !== coverFile ||
+    !imageFileExtensions.has(extension)
+  ) {
+    return {
+      manifest: {
+        ...manifest,
+        coverFile: null,
+        coverUpdatedAt: null,
+        coverBytes: null,
+        coverContentType: null,
+      },
+      changed: false,
+    };
+  }
+
+  const coverPath = path.join(recordDirectory, coverFile);
+  try {
+    const stats = await fs.stat(coverPath);
+    if (
+      !stats.isFile() ||
+      stats.size < 12 ||
+      !(await validateImageSignature(coverPath, extension))
+    ) {
+      return {
+        manifest: {
+          ...manifest,
+          coverFile: null,
+          coverUpdatedAt: null,
+          coverBytes: null,
+          coverContentType: null,
+        },
+        changed: false,
+      };
+    }
+
+    const coverUpdatedAt = stats.mtime.toISOString();
+    const coverContentType = mimeTypeForFile(coverPath);
+    const changed =
+      manifest.coverUpdatedAt !== coverUpdatedAt ||
+      manifest.coverBytes !== stats.size ||
+      manifest.coverContentType !== coverContentType;
+    return {
+      manifest: changed
+        ? {
+            ...manifest,
+            coverUpdatedAt,
+            coverBytes: stats.size,
+            coverContentType,
+          }
+        : manifest,
+      changed,
+    };
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return {
+      manifest: {
+        ...manifest,
+        coverFile: null,
+        coverUpdatedAt: null,
+        coverBytes: null,
+        coverContentType: null,
+      },
+      changed: false,
+    };
+  }
 }
 
 async function validateAudioSignature(file, extension) {
@@ -1147,13 +1388,20 @@ function encodeMediaPath(recordId, relativePath) {
     .join("/");
 }
 
-function asCatalogRecord(manifest, baseUrl) {
+export function asCatalogRecord(manifest, baseUrl) {
+  const coverRevision =
+    manifest.coverUpdatedAt ?? manifest.source?.importedAt ?? "legacy";
   const coverImage = manifest.coverFile
     ? `${baseUrl}/media/records/${encodeMediaPath(
         manifest.id,
         manifest.coverFile,
-      )}`
+      )}?v=${encodeURIComponent(coverRevision)}`
     : undefined;
+  const sourceType = ["track", "album", "playlist"].includes(
+    manifest.source?.type,
+  )
+    ? manifest.source.type
+    : "album";
   return {
     id: manifest.id,
     title: manifest.title,
@@ -1172,7 +1420,7 @@ function asCatalogRecord(manifest, baseUrl) {
     sleeveSize: manifest.sleeveSize,
     sleeveThickness: manifest.sleeveThickness,
     coverImage,
-    backCoverImage: coverImage,
+    backCoverImage: sourceType === "track" ? coverImage : undefined,
     vinylColor: manifest.vinylColor,
     vinylOpacity: manifest.vinylOpacity,
     vinylMarbling: manifest.vinylMarbling,
@@ -1213,6 +1461,7 @@ function asCatalogRecord(manifest, baseUrl) {
     localSource: {
       provider:
         manifest.source?.provider === "catalog" ? "catalog" : "spotify",
+      type: sourceType,
       url: manifest.source?.url ?? null,
       importedAt: manifest.source.importedAt,
     },
@@ -1342,6 +1591,9 @@ function buildCatalogManifest(record, existing = null) {
     rpm: record.rpm === 45 ? 45 : 33.333,
     discCount: record.discCount === 2 ? 2 : 1,
     coverFile: existing?.coverFile ?? null,
+    coverUpdatedAt: existing?.coverUpdatedAt ?? null,
+    coverBytes: existing?.coverBytes ?? null,
+    coverContentType: existing?.coverContentType ?? null,
     tracks,
     links: Array.isArray(record.links) ? record.links : [],
   };
@@ -1359,6 +1611,21 @@ export class LocalLibrary {
     this.catalogFile = path.join(this.root, "catalog.json");
     this.spotifySessionFile = path.join(this.root, "spotify-session.json");
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.spotifyRequestTimeoutMs = Math.max(
+      1,
+      Number(
+        options.spotifyRequestTimeoutMs ?? SPOTIFY_REQUEST_TIMEOUT_MS,
+      ),
+    );
+    this.spotifyRetryDelaysMs = Array.isArray(options.spotifyRetryDelaysMs)
+      ? options.spotifyRetryDelaysMs.map((delay) =>
+          Math.min(
+            MAX_SPOTIFY_RETRY_DELAY_MS,
+            Math.max(0, Number(delay) || 0),
+          ),
+        )
+      : [...SPOTIFY_RETRY_DELAYS_MS];
+    this.sleepImpl = options.sleepImpl ?? wait;
     this.spotifyClientId =
       options.spotifyClientId ?? process.env.SPOTIFY_CLIENT_ID ?? "";
     this.spotifyClientSecret =
@@ -1424,11 +1691,18 @@ export class LocalLibrary {
     const manifests = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
-      const manifest = await readJson(
-        path.join(this.recordsRoot, entry.name, "manifest.json"),
-      );
+      const recordDirectory = path.join(this.recordsRoot, entry.name);
+      const manifestFile = path.join(recordDirectory, "manifest.json");
+      const manifest = await readJson(manifestFile);
       if (manifest?.version === 1 && manifest.id === entry.name) {
-        manifests.push(manifest);
+        const reconciled = await reconcileManifestCover(
+          recordDirectory,
+          manifest,
+        );
+        if (reconciled.changed) {
+          await writeJsonAtomic(manifestFile, reconciled.manifest);
+        }
+        manifests.push(reconciled.manifest);
       }
     }
     return manifests.sort((left, right) => {
@@ -1439,19 +1713,66 @@ export class LocalLibrary {
     });
   }
 
-  async rebuildCatalog() {
+  async orderedManifests({ rewrite = false } = {}) {
     const manifests = await this.manifests();
-    await writeJsonAtomic(this.catalogFile, {
-      version: 1,
-      generatedAt: new Date().toISOString(),
-      records: manifests.map((manifest) => manifest.id),
-    });
-    return manifests;
+    const storedCatalog = await readJson(this.catalogFile);
+    const storedOrder = storedCatalog?.records;
+    const recordIds = reconcileCatalogOrder(
+      storedOrder,
+      manifests.map((manifest) => manifest.id),
+    );
+    if (rewrite || !sameStringOrder(storedOrder, recordIds)) {
+      await writeJsonAtomic(this.catalogFile, {
+        version: 1,
+        generatedAt: new Date().toISOString(),
+        records: recordIds,
+      });
+    }
+    const manifestById = new Map(
+      manifests.map((manifest) => [manifest.id, manifest]),
+    );
+    return recordIds.map((recordId) => manifestById.get(recordId));
+  }
+
+  async rebuildCatalog() {
+    return this.orderedManifests({ rewrite: true });
   }
 
   async getCatalog() {
-    const manifests = await this.manifests();
+    const manifests = await this.orderedManifests();
     return manifests.map((manifest) => asCatalogRecord(manifest, this.baseUrl));
+  }
+
+  async setCatalogOrder(recordIds) {
+    const manifests = await this.manifests();
+    const availableIds = manifests.map((manifest) => manifest.id);
+    const availableSet = new Set(availableIds);
+    const valid =
+      Array.isArray(recordIds) &&
+      recordIds.length === availableIds.length &&
+      recordIds.every(
+        (recordId) =>
+          typeof recordId === "string" && availableSet.has(recordId),
+      ) &&
+      new Set(recordIds).size === recordIds.length;
+    if (!valid) {
+      throw new LocalLibraryError(
+        "INVALID_CATALOG_ORDER",
+        "The shelf order must include every current record exactly once.",
+        422,
+      );
+    }
+    await writeJsonAtomic(this.catalogFile, {
+      version: 1,
+      generatedAt: new Date().toISOString(),
+      records: recordIds,
+    });
+    const manifestById = new Map(
+      manifests.map((manifest) => [manifest.id, manifest]),
+    );
+    return recordIds.map((recordId) =>
+      asCatalogRecord(manifestById.get(recordId), this.baseUrl),
+    );
   }
 
   async readManifest(recordId) {
@@ -1616,6 +1937,74 @@ export class LocalLibrary {
     };
   }
 
+  async spotifyFetch(url, init = {}, { retry = true } = {}) {
+    const retryDelays = retry ? this.spotifyRetryDelaysMs : [];
+    const attempts = retryDelays.length + 1;
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(
+        () => controller.abort(),
+        this.spotifyRequestTimeoutMs,
+      );
+      const signal = init.signal
+        ? AbortSignal.any([init.signal, controller.signal])
+        : controller.signal;
+
+      try {
+        const response = await this.fetchImpl(url, {
+          ...init,
+          signal,
+        });
+        const transientStatus =
+          response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500;
+        if (transientStatus && attempt < retryDelays.length) {
+          await this.sleepImpl(
+            spotifyRetryDelay(response, retryDelays[attempt]),
+          );
+          continue;
+        }
+        if (response.status === 408 || response.status >= 500) {
+          throw new LocalLibraryError(
+            "SPOTIFY_UNAVAILABLE",
+            "Spotify is temporarily unavailable. Check your connection and retry the import.",
+            503,
+            {
+              attempts: attempt + 1,
+              upstreamStatus: response.status,
+            },
+          );
+        }
+        return response;
+      } catch (error) {
+        if (error instanceof LocalLibraryError) throw error;
+        if (attempt < retryDelays.length) {
+          await this.sleepImpl(retryDelays[attempt]);
+          continue;
+        }
+        throw new LocalLibraryError(
+          "SPOTIFY_UNAVAILABLE",
+          "Spotify could not be reached. Check your connection and retry the import.",
+          503,
+          {
+            attempts: attempt + 1,
+            reason: spotifyNetworkFailureReason(error),
+          },
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    throw new LocalLibraryError(
+      "SPOTIFY_UNAVAILABLE",
+      "Spotify could not be reached. Check your connection and retry the import.",
+      503,
+    );
+  }
+
   beginSpotifyAuthorization() {
     if (!this.spotifyClientId || !this.spotifyClientSecret) {
       throw new LocalLibraryError(
@@ -1650,7 +2039,7 @@ export class LocalLibrary {
       );
     }
     const redirectUri = `${this.baseUrl}/v1/spotify/callback`;
-    const response = await this.fetchImpl(
+    const response = await this.spotifyFetch(
       "https://accounts.spotify.com/api/token",
       {
         method: "POST",
@@ -1666,6 +2055,7 @@ export class LocalLibrary {
           redirect_uri: redirectUri,
         }),
       },
+      { retry: false },
     );
     const token = await readResponseJson(response, "Spotify authorization");
     await writeJsonAtomic(
@@ -1687,7 +2077,7 @@ export class LocalLibrary {
     if (!session.refreshToken || !this.spotifyClientId || !this.spotifyClientSecret) {
       return null;
     }
-    const response = await this.fetchImpl(
+    const response = await this.spotifyFetch(
       "https://accounts.spotify.com/api/token",
       {
         method: "POST",
@@ -1724,7 +2114,7 @@ export class LocalLibrary {
         503,
       );
     }
-    const response = await this.fetchImpl(
+    const response = await this.spotifyFetch(
       "https://accounts.spotify.com/api/token",
       {
         method: "POST",
@@ -1764,7 +2154,7 @@ export class LocalLibrary {
     const url = pathOrUrl.startsWith("https:")
       ? pathOrUrl
       : `https://api.spotify.com/v1${pathOrUrl}`;
-    const response = await this.fetchImpl(url, {
+    const response = await this.spotifyFetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
     return readResponseJson(response, label);
@@ -1801,7 +2191,7 @@ export class LocalLibrary {
         "Spotify album",
       );
       const albumTracks = await fetchPagedItems(
-        this.fetchImpl,
+        (url, init) => this.spotifyFetch(url, init),
         album.tracks,
         token,
       );
@@ -1839,7 +2229,7 @@ export class LocalLibrary {
       );
     }
     const playlistItems = await fetchPagedItems(
-      this.fetchImpl,
+      (url, init) => this.spotifyFetch(url, init),
       firstPage,
       token,
       (item) => item?.track ?? item?.item ?? null,
@@ -1891,11 +2281,23 @@ export class LocalLibrary {
 
     try {
       let coverFile = null;
+      let coverContentType = null;
       if (source.coverUrl) {
-        const response = await this.fetchImpl(source.coverUrl, {
-          headers: { "User-Agent": "SideOneLocal/1.0" },
+        const response = await this.spotifyFetch(
+          source.coverUrl,
+          {
+            headers: { "User-Agent": "SideOneLocal/1.0" },
+          },
+        ).catch((error) => {
+          if (
+            error instanceof LocalLibraryError &&
+            error.code === "SPOTIFY_UNAVAILABLE"
+          ) {
+            return null;
+          }
+          throw error;
         });
-        if (response.ok) {
+        if (response?.ok) {
           const contentType = String(
             response.headers.get("content-type") ?? "",
           )
@@ -1904,6 +2306,7 @@ export class LocalLibrary {
           const extension = imageExtensions.get(contentType);
           if (extension) {
             coverFile = `cover.${extension}`;
+            coverContentType = contentType;
             await copyResponseToFile(
               response,
               path.join(staging, coverFile),
@@ -1920,10 +2323,15 @@ export class LocalLibrary {
         });
         if (coverFile) {
           manifest.coverFile = coverFile;
+          const recordCover = path.join(recordDirectory, coverFile);
           await fs.copyFile(
             path.join(staging, coverFile),
-            path.join(recordDirectory, coverFile),
+            recordCover,
           );
+          const coverStats = await fs.stat(recordCover);
+          manifest.coverUpdatedAt = coverStats.mtime.toISOString();
+          manifest.coverBytes = coverStats.size;
+          manifest.coverContentType = coverContentType;
         }
         await writeJsonAtomic(
           path.join(recordDirectory, "manifest.json"),

@@ -29,6 +29,21 @@ function countMatches(source, pattern) {
   return [...source.matchAll(pattern)].length;
 }
 
+test("artwork retries bypass stale responses without dropping the persisted revision", async () => {
+  const { artworkRetryUrl } = await import("../app/artwork-url.ts");
+  assert.equal(
+    artworkRetryUrl(
+      "http://127.0.0.1:4317/media/records/local-album/cover.jpg?v=saved",
+      "retry 1",
+    ),
+    "http://127.0.0.1:4317/media/records/local-album/cover.jpg?v=saved&texture-retry=retry%201",
+  );
+  assert.equal(
+    artworkRetryUrl("/records/cover.jpg#front", 2),
+    "/records/cover.jpg?texture-retry=2#front",
+  );
+});
+
 function assertNumericObjectClose(actual, expected, label, epsilon = 1e-12) {
   assert.deepEqual(Object.keys(actual), Object.keys(expected), `${label} keys`);
   for (const key of Object.keys(expected)) {
@@ -132,13 +147,14 @@ test("server-renders the Side One shell without provider branding", async () => 
   assert.match(html, /01 PRIVATE CATALOG/);
   assert.match(html, /data-testid="archive-canvas"/);
   assert.match(html, /data-testid="inspect-active"/);
+  assert.match(html, /data-testid="flip-sleeve-browse"/);
   assert.match(html, /data-testid="album-panel"/);
   assert.match(html, /data-testid="preview-player"/);
-  assert.match(html, /data-testid="open-local-import"/);
-  assert.match(html, /data-testid="open-local-audio"/);
+  assert.match(html, /data-testid="open-import-music"/);
+  assert.doesNotMatch(html, /data-testid="open-local-audio"/);
   assert.match(html, /aria-label="Vinyl audio player"/);
   assert.match(html, /Official links for every record/);
-  assert.match(html, /Import local vinyl/);
+  assert.match(html, /Import music/i);
 
   const { recordCatalog } = await import("../app/record-catalog.ts");
   const renderedPositions = recordCatalog.map((record) =>
@@ -172,6 +188,37 @@ test("server-renders the Side One shell without provider branding", async () => 
   );
 });
 
+test("default development waits for the local music service", async () => {
+  const [packageSource, launcher] = await Promise.all([
+    readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/dev-local.mjs", import.meta.url), "utf8"),
+  ]);
+  const packageJson = JSON.parse(packageSource);
+
+  assert.equal(
+    packageJson.scripts.dev,
+    "node --env-file-if-exists=.env.local scripts/dev-local.mjs",
+  );
+  assert.equal(
+    packageJson.scripts["dev:local"],
+    packageJson.scripts.dev,
+  );
+  assert.match(packageJson.scripts["dev:app"], /vinext dev/);
+  assert.equal(
+    packageJson.scripts.start,
+    "node --env-file-if-exists=.env.local scripts/dev-local.mjs start",
+  );
+  assert.match(packageJson.scripts["start:app"], /vinext start/);
+  assert.match(launcher, /if \(await localLibraryIsReady\(\)\)/);
+  assert.match(launcher, /await waitForLocalLibrary\(localLibrary\)/);
+  assert.match(launcher, /\[vinextCli, appCommand\]/);
+  assert.ok(
+    launcher.indexOf("await waitForLocalLibrary(localLibrary)") <
+      launcher.indexOf("const app = spawn"),
+    "the app starts only after the local music service is ready",
+  );
+});
+
 test("keeps focused header controls clear of the open album panel", async () => {
   const styles = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
 
@@ -192,6 +239,121 @@ test("keeps focused header controls clear of the open album panel", async () => 
     styles,
     /@media \(max-width: 760px\)[\s\S]*?\.is-focused \.archive-header \{\s*right: 0;/,
     "the header keeps the full viewport width above the bottom-sheet panel",
+  );
+});
+
+test("keeps the browse sleeve flip control pointer-interactive", async () => {
+  const styles = await readFile(
+    new URL("../app/globals.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.sleeve-flip-button\s*\{[\s\S]*?pointer-events:\s*auto;/,
+  );
+});
+
+test("rearranges record ids deterministically without losing collection entries", async () => {
+  const {
+    moveRecordId,
+    orderRecordsById,
+    sameRecordOrder,
+  } = await import("../app/record-order.ts");
+  const initial = ["alpha", "bravo", "charlie", "delta"];
+  const moved = moveRecordId(initial, "charlie", 0);
+
+  assert.deepEqual(initial, ["alpha", "bravo", "charlie", "delta"]);
+  assert.deepEqual(moved, ["charlie", "alpha", "bravo", "delta"]);
+  assert.deepEqual(moveRecordId(moved, "charlie", 99), [
+    "alpha",
+    "bravo",
+    "delta",
+    "charlie",
+  ]);
+  assert.equal(sameRecordOrder(initial, moved), false);
+  assert.equal(sameRecordOrder(initial, [...initial]), true);
+  assert.deepEqual(
+    orderRecordsById(
+      [{ id: "alpha" }, { id: "bravo" }, { id: "charlie" }],
+      ["charlie", "alpha"],
+    ).map((record) => record.id),
+    ["charlie", "alpha", "bravo"],
+  );
+});
+
+test("offers an accessible pointer and keyboard shelf rearrange workflow", async () => {
+  const [dialog, library, importDialog, client, server, styles] =
+    await Promise.all([
+    readFile(new URL("../app/RearrangeLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/LocalLibraryImport.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/local-library.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../services/local-library/server.mjs", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(library, /data-testid="open-rearrange-library"/);
+  assert.match(library, /pendingBrowseRecordIdRef/);
+  assert.match(library, /pendingRearrangeOpenRef/);
+  assert.match(library, /rearrangeAnchorRecordIdRef/);
+  assert.match(library, /commandsRef\.current\.returnToShelf\(\)/);
+  assert.match(library, /saveLocalCatalogOrder\(recordIds\)/);
+  assert.doesNotMatch(
+    library,
+    /disabled=\{isFocused\s*\|\|\s*isBusy\s*\|\|\s*!localServiceAvailable\}/,
+  );
+  assert.match(
+    library,
+    /disabled=\{!catalogReady\s*\|\|\s*isBusy\s*\|\|\s*rearrangeSaving\}/,
+  );
+  assert.match(dialog, /aria-modal="true"/);
+  assert.match(dialog, /data-testid="save-record-order"/);
+  assert.match(dialog, /setPointerCapture/);
+  assert.match(dialog, /onPointerCancel=/);
+  assert.match(dialog, /event\.key === "ArrowUp"/);
+  assert.match(dialog, /event\.key === "Escape"/);
+  assert.match(client, /method: "PUT"/);
+  assert.match(client, /\/v1\/catalog\/order/);
+  assert.match(server, /library\.setCatalogOrder\(body\.recordIds\)/);
+  assert.match(importDialog, /"SPOTIFY_UNAVAILABLE"/);
+  assert.match(importDialog, /"SPOTIFY_RATE_LIMITED"/);
+  assert.match(importDialog, /Retry import/);
+  assert.match(importDialog, /Your URL is still here/);
+  assert.match(
+    styles,
+    /\.rearrange-library__handle\s*\{[\s\S]*?touch-action:\s*none;/,
+  );
+  assert.match(
+    styles,
+    /\.rearrange-trigger\s*\{[\s\S]*?pointer-events:\s*auto;/,
+  );
+});
+
+test("exposes confirmed deletion for imported records in browse and inspection views", async () => {
+  const [library, styles] = await Promise.all([
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(library, /data-testid="delete-record-browse"/);
+  assert.match(library, /data-testid="delete-record-inspect"/);
+  assert.match(
+    library,
+    /record\.localSource\?\.provider !== "spotify"/,
+    "seed catalog records cannot be deleted through the local import action",
+  );
+  assert.match(
+    library,
+    /This permanently removes the record, its cached artwork, and any attached local audio files/,
+  );
+  assert.match(library, /await removeLocalRecord\(record\.id\)/);
+  assert.match(library, /await refreshLocalLibrary\(\)/);
+  assert.match(
+    styles,
+    /\.delete-record-button--browse\s*\{[\s\S]*?pointer-events:\s*auto;/,
   );
 });
 
@@ -819,6 +981,16 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
     };
   }
 
+  function cameraFacingShelvedPose(record, activeIndex) {
+    return shelvedRecordPose(layout, {
+      recordX: record.x,
+      slotZ: 0.04,
+      cameraX: -0.38 + records[activeIndex].x,
+      cameraZ: 9.4,
+      width: record.width,
+    });
+  }
+
   function assertSeparated(poses, context) {
     for (let left = 0; left < records.length; left += 1) {
       for (let right = left + 1; right < records.length; right += 1) {
@@ -849,7 +1021,10 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
   for (let from = 0; from < records.length; from += 1) {
     for (let to = 0; to < records.length; to += 1) {
       if (from === to) continue;
-      const poses = records.map(() => shelvedRecordPose(layout));
+      const shelvedPoses = records.map((record) =>
+        cameraFacingShelvedPose(record, to),
+      );
+      const poses = shelvedPoses.map((pose) => ({ ...pose }));
       poses[from] = presentedRecordPose(layout);
       assertSeparated(poses, `${from}->${to} initial`);
 
@@ -860,6 +1035,7 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
             phase,
             step / steps,
             layout,
+            shelvedPoses[from],
           );
           assertSeparated(poses, `${from}->${to} ${phase} ${step}/${steps}`);
         }
@@ -872,6 +1048,7 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
             phase,
             step / steps,
             layout,
+            shelvedPoses[to],
           );
           assertSeparated(poses, `${from}->${to} ${phase} ${step}/${steps}`);
         }
@@ -899,12 +1076,26 @@ test("keeps every sleeve footprint separated across all six browse phases", asyn
     shelvedRecordPose(layout),
     "extract start",
   );
+  const aimed = cameraFacingShelvedPose(records.at(-1), 0);
+  assertNumericObjectClose(
+    browseRecordMotionPose("shelve-current", 1, layout, aimed),
+    aimed,
+    "camera-facing shelve end",
+  );
+  assertNumericObjectClose(
+    browseRecordMotionPose("extract-next", 0, layout, aimed),
+    aimed,
+    "camera-facing extract start",
+  );
 });
 
 test("cue choreography has deterministic endpoints and exact reverse paths", async () => {
-  const { cueMotionPose, reinsertProgressForExtraction } = await import(
-    "../app/record-motion.ts"
-  );
+  const {
+    cueCameraTurntableMix,
+    cueMotionPose,
+    reinsertProgressForExtraction,
+    vinylPresentationForCue,
+  } = await import("../app/record-motion.ts");
   const layout = {
     sleevedVinyl: {
       x: -1.2,
@@ -1117,6 +1308,43 @@ test("cue choreography has deterministic endpoints and exact reverse paths", asy
     cueMotionPose("reinsert-vinyl", 10, layout).vinyl,
     layout.sleevedVinyl,
   );
+
+  const assertCameraMix = (phase, progress, expected) => {
+    assert.ok(
+      Math.abs(cueCameraTurntableMix(phase, progress) - expected) < 1e-12,
+      `${phase} at ${progress} reaches camera mix ${expected}`,
+    );
+  };
+  assertCameraMix("extract-vinyl", 0, 0);
+  assertCameraMix("extract-vinyl", 1, 0.16);
+  assertCameraMix("transport-to-turntable", 0, 0.16);
+  assertCameraMix("transport-to-turntable", 1, 1);
+  assertCameraMix("lower-tonearm", 0, 1);
+  assertCameraMix("playing", 0.5, 1);
+  assertCameraMix("raise-tonearm", 1, 1);
+  assertCameraMix("return-to-sleeve", 0, 1);
+  assertCameraMix("return-to-sleeve", 1, 0.16);
+  assertCameraMix("reinsert-vinyl", 0, 0.16);
+  assertCameraMix("reinsert-vinyl", 1, 0);
+  for (const progress of samples) {
+    assert.ok(
+      Math.abs(
+        cueCameraTurntableMix("transport-to-turntable", progress) -
+          cueCameraTurntableMix("return-to-sleeve", 1 - progress),
+      ) < 1e-12,
+    );
+  }
+  assert.equal(vinylPresentationForCue(null), "sleeve");
+  assert.equal(
+    vinylPresentationForCue("transport-to-turntable"),
+    "moving-to-turntable",
+  );
+  assert.equal(vinylPresentationForCue("playing"), "turntable");
+  assert.equal(
+    vinylPresentationForCue("return-to-sleeve"),
+    "moving-to-sleeve",
+  );
+  assert.equal(vinylPresentationForCue(null, true), "turntable");
 });
 
 test("track changes classify physical motion and preserve playback intent", async () => {
@@ -1303,19 +1531,150 @@ test("browse presentation and inspection settle to exact face-on sleeve poses", 
   assert.equal(focused.scale, 1.03);
 });
 
+test("imported back-cover tracklists preserve side labels, artists, and dense layouts", async () => {
+  const {
+    formatBackCoverTrack,
+    getImportedBackCoverTrackLayout,
+  } = await import("../app/back-cover-layout.ts");
+  const label = formatBackCoverTrack(
+    {
+      id: "fixture-track",
+      title: "A Long Way Home",
+      artists: ["First Artist", "First Artist", "Second Artist"],
+      trackNumber: 8,
+      side: "B",
+      sideTrackNumber: 3,
+      discNumber: 1,
+      duration: 204,
+    },
+    true,
+  );
+
+  assert.equal(label, "B3  A Long Way Home — First Artist, Second Artist");
+
+  const short = getImportedBackCoverTrackLayout(8);
+  const multiColumn = getImportedBackCoverTrackLayout(30);
+  const dense = getImportedBackCoverTrackLayout(100);
+
+  assert.equal(short.columnCount, 1);
+  assert.equal(multiColumn.columnCount, 3);
+  assert.equal(dense.columnCount, 4);
+  for (const layout of [short, multiColumn, dense]) {
+    assert.ok(layout.rowsPerColumn >= 1);
+    assert.ok(layout.fontSize > 0);
+    assert.ok(layout.lineHeight >= layout.fontSize);
+    assert.ok(
+      layout.rowsPerColumn * layout.lineHeight <=
+        layout.trackBottom - layout.trackTop + 1e-9,
+    );
+  }
+});
+
+test("sleeve cover flips have exact faces and a lifted midpoint", async () => {
+  const { sleeveFaceYaw, sleeveFlipMotionPose } = await import(
+    "../app/record-motion.ts"
+  );
+  const frontYaw = sleeveFaceYaw("front");
+  const backYaw = sleeveFaceYaw("back");
+  const front = sleeveFlipMotionPose(frontYaw, backYaw, 0);
+  const midpoint = sleeveFlipMotionPose(frontYaw, backYaw, 0.5);
+  const back = sleeveFlipMotionPose(frontYaw, backYaw, 1);
+  const reverse = sleeveFlipMotionPose(backYaw, frontYaw, 1);
+
+  assert.equal(front.yaw, 0);
+  assert.equal(front.lift, 0);
+  assert.equal(front.scale, 1);
+  assert.ok(Math.abs(midpoint.yaw - Math.PI / 2) < 1e-12);
+  assert.ok(midpoint.lift > 0);
+  assert.ok(midpoint.scale < 1);
+  assert.equal(back.yaw, Math.PI);
+  assert.ok(Math.abs(back.lift) < 1e-12);
+  assert.equal(back.scale, 1);
+  assert.equal(reverse.yaw, 0);
+});
+
+test("shelved sleeves aim their spines at the browse camera without moving the shelf row", async () => {
+  const {
+    createRecordMotionLayout,
+    recordSpineAnchor,
+    shelvedRecordPose,
+  } = await import("../app/record-motion.ts");
+  const width = 2.16;
+  const layout = createRecordMotionLayout([
+    { width, thickness: 0.042 },
+  ]);
+  const view = {
+    recordX: 1.4,
+    slotZ: 0.04,
+    cameraX: -0.38,
+    cameraZ: 9.4,
+    width,
+  };
+  const pose = shelvedRecordPose(layout, view);
+  const anchor = recordSpineAnchor(pose, width);
+  const cameraDelta = {
+    x: view.cameraX - view.recordX - anchor.x,
+    z: view.cameraZ - view.slotZ - anchor.z,
+  };
+  const cameraDistance = Math.hypot(cameraDelta.x, cameraDelta.z);
+  const spineNormal = {
+    x: -Math.cos(pose.yaw),
+    z: Math.sin(pose.yaw),
+  };
+
+  assert.ok(pose.yaw < Math.PI / 2);
+  assert.ok(Math.abs(anchor.x) < 1e-12);
+  assert.ok(
+    Math.abs(anchor.z - (layout.shelvedZ + width * 0.5)) < 1e-12,
+  );
+  assert.ok(
+    Math.abs(
+      spineNormal.x * (cameraDelta.x / cameraDistance) +
+        spineNormal.z * (cameraDelta.z / cameraDistance) -
+        1,
+    ) < 1e-12,
+  );
+});
+
+test("spine textures preserve the physical sleeve aspect ratio", async () => {
+  const {
+    getSleeveSpineDimensions,
+    getSleeveSpineTextureSize,
+    resolveSleeveDimensions,
+  } = await import("../app/sleeve-spec.ts");
+  const dimensions = resolveSleeveDimensions({
+    sleeveSize: 2.16,
+    sleeveThickness: 0.042,
+  });
+  const spine = getSleeveSpineDimensions(dimensions);
+  const texture = getSleeveSpineTextureSize(dimensions);
+
+  assert.equal(texture.height, 2048);
+  assert.ok(texture.width >= 32);
+  assert.ok(
+    Math.abs(texture.width / texture.height - spine.width / spine.height) <=
+      0.5 / texture.height,
+  );
+});
+
 test("sleeve model is a thin open cardstock pocket, not a rounded book", async () => {
   const THREE = await import("three");
   const { createSleeveModel } = await import("../app/sleeve-model.ts");
+  const { getSleeveSpineDimensions } = await import("../app/sleeve-spec.ts");
   const textures = [new THREE.Texture(), new THREE.Texture(), new THREE.Texture()];
-  const model = createSleeveModel({
+  const dimensions = {
     width: 2.16,
     height: 2.16,
     thickness: 0.042,
+  };
+  const model = createSleeveModel({
+    ...dimensions,
     color: "#d9d0bb",
     accent: "#176b70",
     frontTexture: textures[0],
     backTexture: textures[1],
     spineTexture: textures[2],
+    spineDimensions: getSleeveSpineDimensions(dimensions),
   });
   const parts = new Set();
   let meshCount = 0;
@@ -1330,6 +1689,14 @@ test("sleeve model is a thin open cardstock pocket, not a rounded book", async (
   assert.equal(model.mouthFlex.name, "sleeveMouthFlex");
   assert.ok(model.body.geometry.parameters.depth / 2.16 < 0.025);
   assert.ok(model.frontSurface.material.roughness >= 0.8);
+  const spine = getSleeveSpineDimensions(dimensions);
+  assert.equal(model.spineSurface.geometry.parameters.width, spine.width);
+  assert.equal(model.spineSurface.geometry.parameters.height, spine.height);
+  assert.equal(model.spineSurface.material.side, THREE.FrontSide);
+  assert.equal(
+    model.spineSurface.position.x,
+    -dimensions.width * 0.5 - spine.surfaceOffset,
+  );
   assert.ok(meshCount >= 10);
   for (const part of [
     "cardstockPocket",
@@ -1490,10 +1857,11 @@ test("turntable settings use stable variants and a shared Mint GLB loader", asyn
   assert.match(librarySource, /window\.localStorage\.setItem/);
 });
 
-test("vinyl-centered play control follows cue motion and toggles playback", async () => {
-  const [engineSource, librarySource] = await Promise.all([
+test("playback follows cue motion while preserving the inspected sleeve and tracklist", async () => {
+  const [engineSource, librarySource, styles] = await Promise.all([
     readFile(new URL("../app/RecordShelfEngine.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
   const anchorStart = engineSource.indexOf("  private updateVinylAnchor() {");
@@ -1510,6 +1878,26 @@ test("vinyl-centered play control follows cue motion and toggles playback", asyn
   );
   assert.match(librarySource, /is-playing/);
   assert.match(librarySource, /Pause selected track/);
+  assert.match(engineSource, /private updateCueCamera\(delta: number\)/);
+  assert.match(engineSource, /cueCameraTurntableMix\(phase, phaseProgress\)/);
+  assert.match(engineSource, /this\.cueCameraReturnPosition\.copy\(this\.camera\.position\)/);
+  assert.match(engineSource, /playingCameraReturnDuration/);
+  assert.match(
+    engineSource,
+    /this\.cueCameraSleevePosition,\s*returnProgress,/,
+  );
+  assert.match(engineSource, /onVinylPresentation\(presentation\)/);
+  assert.match(librarySource, /data-vinyl-presentation=\{vinylPresentation\}/);
+  assert.match(librarySource, /aria-hidden=\{!isFocused\}/);
+  assert.match(librarySource, /inert=\{isFocused \? undefined : true\}/);
+  assert.doesNotMatch(
+    styles,
+    /\.is-vinyl-presented \.album-panel\s*\{[\s\S]*?opacity:\s*0;/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.is-focused\.is-vinyl-presented \.player\s*\{[\s\S]*?left:\s*50%;/,
+  );
 });
 
 test("engine owns the only animation loop and audio stays frame-loop free", async () => {
@@ -1551,10 +1939,14 @@ test("engine owns the only animation loop and audio stays frame-loop free", asyn
 });
 
 test("archive keyboard navigation survives control focus and clears interrupted drags", async () => {
-  const engine = await readFile(
-    new URL("../app/RecordShelfEngine.ts", import.meta.url),
-    "utf8",
-  );
+  const [engine, library, styles] = await Promise.all([
+    readFile(
+      new URL("../app/RecordShelfEngine.ts", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
 
   assert.match(engine, /window\.addEventListener\("keydown", this\.handleKeyDown\)/);
   assert.match(engine, /window\.removeEventListener\("keydown", this\.handleKeyDown\)/);
@@ -1564,6 +1956,27 @@ test("archive keyboard navigation survives control focus and clears interrupted 
   assert.match(engine, /this\.clearPointerInteraction\(event\.pointerId\)/);
   assert.match(engine, /this\.isEditableKeyboardTarget\(event\.target\)/);
   assert.match(engine, /this\.isNativeActivationTarget\(event\.target\)/);
+  assert.match(engine, /const jumpToShelfEdge = event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(
+    engine,
+    /jumpToShelfEdge && event\.key === "ArrowRight"[\s\S]*?this\.browseTo\(this\.runtimeRecords\.length - 1\)/,
+  );
+  assert.match(
+    engine,
+    /jumpToShelfEdge && event\.key === "ArrowLeft"[\s\S]*?this\.browseTo\(0\)/,
+  );
+  assert.match(library, /data-testid="browse-first"/);
+  assert.match(library, /aria-keyshortcuts="Meta\+ArrowLeft Control\+ArrowLeft"/);
+  assert.match(library, /data-testid="browse-last"/);
+  assert.match(library, /aria-keyshortcuts="Meta\+ArrowRight Control\+ArrowRight"/);
+  assert.match(
+    styles,
+    /\.archive-edge-navigation\s*\{[\s\S]*?pointer-events:\s*none;/,
+  );
+  assert.match(
+    styles,
+    /\.archive-arrow\s*\{[\s\S]*?pointer-events:\s*auto;/,
+  );
 });
 
 test("guards the local yt-dlp action behind an explicit authorization", async () => {
@@ -1588,14 +2001,57 @@ test("guards the local yt-dlp action behind an explicit authorization", async ()
   assert.match(library, /"--no-playlist"/);
   assert.match(library, /"bestaudio\/best"/);
   assert.match(library, /"--js-runtimes"/);
-  assert.match(library, /runWithForbiddenRetry/);
+  assert.match(library, /runWithYtDlpFallback/);
   assert.match(library, /sanitizeYtDlpOutput/);
+  assert.match(library, /YT_DLP_NETWORK_TIMEOUT/);
+  assert.match(library, /"--socket-timeout"/);
+  assert.match(library, /"http:exp=1:20"/);
   assert.match(library, /shell: false/);
   assert.match(library, /DOWNLOAD_AUTHORIZATION_REQUIRED/);
   assert.match(server, /\/youtube-download/);
   assert.match(server, /\/v1\/downloader\/status/);
   assert.match(dialog, /fetchLocalDownloaderStatus/);
   assert.match(dialog, /!downloaderReady/);
+});
+
+test("imports music through one entry point and fills only verified audio automatically", async () => {
+  const [importDialog, library] = await Promise.all([
+    readFile(
+      new URL("../app/LocalLibraryImport.tsx", import.meta.url),
+      "utf8",
+    ),
+    readFile(new URL("../app/VinylLibrary.tsx", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(library, /data-testid="open-import-music"/);
+  assert.doesNotMatch(library, /data-testid="open-local-audio"/);
+  assert.doesNotMatch(importDialog, /data-testid="local-import-auto-audio"/);
+  assert.doesNotMatch(importDialog, /data-testid="local-import-auto-confirm"/);
+  assert.doesNotMatch(
+    importDialog,
+    /Find and save missing audio automatically/,
+  );
+  assert.doesNotMatch(
+    importDialog,
+    /I own this media or have permission to download and keep it/,
+  );
+  assert.match(importDialog, /matchLocalRecord/);
+  assert.match(importDialog, /downloadLocalTrackFromYouTube/);
+  assert.match(importDialog, /track\.youtubeMatch\?\.verified === true/);
+  assert.match(importDialog, /if \(automaticAudioReady\)/);
+  assert.match(importDialog, /Artwork, tracklists, and selected files will still import normally/);
+  assert.match(importDialog, /onOpenAudioManager/);
+  assert.match(importDialog, /await onImportComplete\(imported\.records\)/);
+  assert.ok(
+    importDialog.indexOf("await onImportComplete(imported.records)") >
+      importDialog.indexOf("if (libraryNeedsRefresh)"),
+  );
+  assert.match(library, /pendingImportedRecordIdRef/);
+  assert.match(library, /await refreshLocalLibrary\(\)/);
+  assert.match(
+    library,
+    /engineRef\.current\?\.focusRecord\(importedRecordIndex\)/,
+  );
 });
 
 test("maps each saved file back to its exact song row in the UI", async () => {
@@ -1630,6 +2086,7 @@ test("exposes the safe vinyl diagnostics and command surface", async () => {
     "play",
     "pause",
     "stop",
+    "flipSleeve",
     "resetView",
     "returnToShelf",
   ]) {
@@ -1660,6 +2117,9 @@ test("exposes the safe vinyl diagnostics and command surface", async () => {
     "motionPhase",
     "cuePhase",
     "cueProgress",
+    "sleeveFace",
+    "sleeveFlipPhase",
+    "canFlipSleeve",
     "collisionRejects",
     "currentCollision",
     "audio",
@@ -1671,5 +2131,7 @@ test("exposes the safe vinyl diagnostics and command surface", async () => {
     diagnostics,
     /^\s*(?:renderer|scene|camera|controls|runtimeRecords|audioElement):/m,
   );
+  assert.match(library, /data-testid="flip-sleeve-inspect"/);
+  assert.match(library, /data-testid="flip-sleeve-mobile"/);
   assert.doesNotMatch(library, /__VINYL_LIBRARY__[\s\S]{0,1200}\bsecret\b/i);
 });

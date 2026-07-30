@@ -98,6 +98,7 @@ export type CatalogRecord = {
   /** Present only for records loaded from the loopback filesystem library. */
   localSource?: {
     provider: "spotify" | "catalog";
+    type?: "track" | "album" | "playlist";
     url: string | null;
     importedAt: string;
   };

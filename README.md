@@ -57,29 +57,36 @@ npm ci
 npm run dev
 ```
 
-To enable the private filesystem-backed import flow, add Spotify developer
-credentials to `.env.local`, register
+The default development and production-start commands start the private
+loopback music service, wait for it to respond, and then start the app. If the
+music service is already running, it is reused. Use `npm run dev:app` or
+`npm run start:app` only when you deliberately want the app without local
+music.
+
+To enable Spotify imports, add Spotify developer credentials to `.env.local`,
+register
 `http://127.0.0.1:4317/v1/spotify/callback`, and run:
 
 ```bash
-npm run dev:local
+npm run dev
 ```
 
-The **Import local vinyl** dialog reads Spotify track, album, or playlist
-metadata, caches the cover on this computer, and attaches audio files you own or
-are authorized to keep. It stores manifests, artwork, and audio beneath the
-gitignored `.local-vinyl-library/` directory. There is no database, cloud media
-store, or hosted job service. The existing 3D cardstock sleeve paints the local
-cover onto both its front and back artwork surfaces.
+`npm run dev:local` remains an alias for the same combined startup flow.
 
-The **Local audio** manager syncs all seven catalog releases into the private
-helper and includes any Spotify imports already on the shelf. It searches
-YouTube locally with `yt-dlp`, ranks likely official audio by title, artist,
-channel, and duration, and keeps uncertain results out of the automatic
-download queue. For media you own or are authorized to keep, it can then save
-the verified queue sequentially with local `yt-dlp` and FFmpeg. Individual
-tracks still accept a manually selected direct YouTube video URL. Matches,
-recordings, and authorization state stay on this computer. Successfully
+The single **Import music** action reads Spotify track, album, or playlist
+metadata, caches the cover on this computer, and can attach audio files the
+user owns. With automatic audio enabled and an explicit ownership or permission
+confirmation, the same import immediately searches for high-confidence matches
+and saves them sequentially with local `yt-dlp` and FFmpeg. Uncertain matches
+stay in the review queue and are never downloaded automatically.
+
+The import dialog also opens the catalog audio manager for releases already on
+the shelf. It syncs all seven catalog releases into the private helper, includes
+Spotify imports, ranks likely official audio by title, artist, channel, and
+duration, and keeps uncertain results out of the automatic download queue.
+Individual tracks still accept a manually selected direct YouTube video URL.
+Manifests, artwork, audio, matches, and authorization state stay beneath the
+gitignored `.local-vinyl-library/` directory on this computer. Successfully
 attached songs receive a **Local** marker in their album track list; the
 association uses stable record and track IDs rather than queue position.
 

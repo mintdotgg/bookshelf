@@ -1,12 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import type { CatalogRecord } from "./record-catalog";
 import {
+  downloadLocalTrackFromYouTube,
+  fetchLocalDownloaderStatus,
   fetchLocalSpotifyStatus,
   importSpotifyMetadata,
   localLibraryOrigin,
   LocalLibraryApiError,
+  matchLocalRecord,
   uploadLocalTrack,
+  type LocalDownloaderStatus,
   type LocalSpotifyStatus,
 } from "./local-library";
 
@@ -14,6 +19,8 @@ type LocalLibraryImportProps = {
   open: boolean;
   onClose: () => void;
   onLibraryChanged: () => Promise<void>;
+  onImportComplete: (records: CatalogRecord[]) => Promise<void>;
+  onOpenAudioManager: () => void;
 };
 
 function sortFiles(files: File[]) {
@@ -25,10 +32,46 @@ function sortFiles(files: File[]) {
   );
 }
 
+function recordTrackKey(recordId: string, trackId: string) {
+  return `${recordId}:${trackId}`;
+}
+
+function summarizeImportedAudio(
+  records: CatalogRecord[],
+  uploadedTrackKeys: Set<string>,
+) {
+  const tracks = records.flatMap((record) =>
+    record.tracks.map((track) => ({
+      ...track,
+      uploaded: uploadedTrackKeys.has(recordTrackKey(record.id, track.id)),
+    })),
+  );
+  const ready = tracks.filter((track) => track.previewUrl || track.uploaded);
+  const review = tracks.filter(
+    (track) =>
+      !track.previewUrl &&
+      !track.uploaded &&
+      track.youtubeMatch &&
+      !track.youtubeMatch.verified,
+  );
+  const missing = tracks.filter(
+    (track) =>
+      !track.previewUrl && !track.uploaded && !track.youtubeMatch,
+  );
+  return {
+    ready: ready.length,
+    review: review.length,
+    missing: missing.length,
+    total: tracks.length,
+  };
+}
+
 export function LocalLibraryImport({
   open,
   onClose,
   onLibraryChanged,
+  onImportComplete,
+  onOpenAudioManager,
 }: LocalLibraryImportProps) {
   const [spotifyUrl, setSpotifyUrl] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -37,14 +80,22 @@ export function LocalLibraryImport({
     "Paste a Spotify URL to create a local virtual pressing.",
   );
   const [error, setError] = useState<string | null>(null);
+  const [retryAvailable, setRetryAvailable] = useState(false);
   const [spotifyStatus, setSpotifyStatus] =
     useState<LocalSpotifyStatus | null>(null);
+  const [downloaderStatus, setDownloaderStatus] =
+    useState<LocalDownloaderStatus | null>(null);
 
   const sortedFiles = useMemo(() => sortFiles(files), [files]);
+  const downloaderReady = downloaderStatus?.ready === true;
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setDownloaderStatus(null);
+    });
     void fetchLocalSpotifyStatus()
       .then((nextStatus) => {
         if (!cancelled) setSpotifyStatus(nextStatus);
@@ -52,12 +103,42 @@ export function LocalLibraryImport({
       .catch(() => {
         if (!cancelled) setSpotifyStatus(null);
       });
+    void fetchLocalDownloaderStatus()
+      .then((nextStatus) => {
+        if (!cancelled) setDownloaderStatus(nextStatus);
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        const message =
+          caught instanceof Error
+            ? caught.message
+            : "Downloader preflight failed.";
+        setDownloaderStatus({
+          ready: false,
+          ytDlp: { ready: false, version: null, error: message },
+          ffmpeg: { ready: null, version: null, error: null },
+          jsRuntime: {
+            ready: null,
+            version: null,
+            error: null,
+            name: null,
+          },
+          ejs: { ready: null, version: null, error: null },
+          issues: [message],
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) onClose();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
-      cancelled = true;
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [busy, onClose, open]);
@@ -69,52 +150,146 @@ export function LocalLibraryImport({
     if (!spotifyUrl.trim() || busy) return;
     setBusy(true);
     setError(null);
+    setRetryAvailable(false);
     setStatus("Reading Spotify metadata and saving the cover locally");
+    let libraryNeedsRefresh = false;
+    let automaticAudioReady = downloaderReady;
 
     try {
+      if (!downloaderStatus) {
+        const latestDownloaderStatus = await fetchLocalDownloaderStatus().catch(
+          () => null,
+        );
+        if (latestDownloaderStatus) {
+          setDownloaderStatus(latestDownloaderStatus);
+          automaticAudioReady = latestDownloaderStatus.ready;
+        }
+      }
       const imported = await importSpotifyMetadata(spotifyUrl);
-      const tracks = imported.records.flatMap((record) =>
+      libraryNeedsRefresh = true;
+      const importedTracks = imported.records.flatMap((record) =>
         record.tracks.map((track) => ({ record, track })),
       );
+      const uploadedTrackKeys = new Set<string>();
+      const latestRecords = new Map(
+        imported.records.map((record) => [record.id, record]),
+      );
       await onLibraryChanged();
+      libraryNeedsRefresh = false;
 
       if (sortedFiles.length) {
-        const uploadCount = Math.min(sortedFiles.length, tracks.length);
+        const uploadCount = Math.min(sortedFiles.length, importedTracks.length);
         for (let index = 0; index < uploadCount; index += 1) {
           const file = sortedFiles[index];
-          const target = tracks[index];
-          setStatus(
-            `Saving ${index + 1} of ${uploadCount}: ${file.name}`,
+          const target = importedTracks[index];
+          setStatus(`Saving ${index + 1} of ${uploadCount}: ${file.name}`);
+          await uploadLocalTrack(target.record.id, target.track.id, file);
+          uploadedTrackKeys.add(
+            recordTrackKey(target.record.id, target.track.id),
           );
-          await uploadLocalTrack(
-            target.record.id,
-            target.track.id,
-            file,
-          );
+          libraryNeedsRefresh = true;
         }
+      }
+
+      let downloaded = 0;
+      if (automaticAudioReady) {
+        for (const record of imported.records) {
+          const missingTrackIds = record.tracks
+            .filter(
+              (track) =>
+                !track.previewUrl &&
+                !uploadedTrackKeys.has(recordTrackKey(record.id, track.id)),
+            )
+            .map((track) => track.id);
+          if (!missingTrackIds.length) continue;
+          setStatus(`Finding verified audio for ${record.title}`);
+          const match = await matchLocalRecord(record.id, {
+            trackIds: missingTrackIds,
+          });
+          latestRecords.set(record.id, match.record);
+          libraryNeedsRefresh = true;
+        }
+
+        const downloadQueue = [...latestRecords.values()].flatMap((record) =>
+          record.tracks
+            .filter(
+              (track) =>
+                !track.previewUrl &&
+                !uploadedTrackKeys.has(recordTrackKey(record.id, track.id)) &&
+                track.youtubeMatch?.verified === true,
+            )
+            .map((track) => ({ record, track })),
+        );
+
+        for (let index = 0; index < downloadQueue.length; index += 1) {
+          const { record, track } = downloadQueue[index];
+          setStatus(
+            `Saving verified audio ${index + 1} of ${downloadQueue.length}: ${
+              track.title
+            }`,
+          );
+          const updated = await downloadLocalTrackFromYouTube(
+            record.id,
+            track.id,
+            null,
+            true,
+          );
+          latestRecords.set(updated.id, updated);
+          downloaded += 1;
+          libraryNeedsRefresh = true;
+        }
+      }
+
+      if (libraryNeedsRefresh) {
         await onLibraryChanged();
-        const remaining = tracks.length - uploadCount;
+        libraryNeedsRefresh = false;
+      }
+
+      const summary = summarizeImportedAudio(
+        [...latestRecords.values()],
+        uploadedTrackKeys,
+      );
+      const remaining = summary.review + summary.missing;
+      if (automaticAudioReady) {
         setStatus(
-          remaining > 0
-            ? `Local pressing ready · ${remaining} ${
-                remaining === 1 ? "track" : "tracks"
-              } still ${remaining === 1 ? "needs" : "need"} an audio file`
-            : `Local pressing ready · ${uploadCount} audio ${
-                uploadCount === 1 ? "file" : "files"
-              } attached`,
+          remaining
+            ? `Music imported · ${summary.ready}/${summary.total} tracks ready · ${remaining} ${
+                remaining === 1 ? "track needs" : "tracks need"
+              } review`
+            : `Music imported · all ${summary.total} tracks ready${
+                downloaded ? ` · ${downloaded} downloaded automatically` : ""
+              }`,
         );
       } else {
         setStatus(
           imported.duplicate
-            ? "This Spotify release is already in your local collection."
-            : "Metadata and cover saved locally. Select audio files and import the same URL again to attach them.",
+            ? "This release is already in your local collection."
+            : summary.ready
+              ? `Music imported · ${summary.ready}/${summary.total} audio files attached`
+              : "Sleeve and track list imported. Add audio now or manage it later.",
         );
       }
+      await onImportComplete(imported.records);
     } catch (caught) {
+      if (libraryNeedsRefresh) {
+        await onLibraryChanged().catch(() => undefined);
+      }
       const message =
         caught instanceof Error ? caught.message : "Local import failed.";
+      const canRetry =
+        caught instanceof LocalLibraryApiError &&
+        [
+          "SPOTIFY_UNAVAILABLE",
+          "SPOTIFY_RATE_LIMITED",
+          "SPOTIFY_INVALID_RESPONSE",
+        ].includes(caught.code);
+      setRetryAvailable(canRetry);
       setError(message);
-      setStatus("Import stopped");
+      setStatus(
+        canRetry
+          ? "Spotify is temporarily unavailable. Your URL is still here—retry when the connection returns."
+          : "Import stopped. Completed files are still saved.",
+      );
       if (
         caught instanceof LocalLibraryApiError &&
         caught.code === "SPOTIFY_USER_AUTH_REQUIRED"
@@ -133,7 +308,7 @@ export function LocalLibraryImport({
       <button
         type="button"
         className="local-import__backdrop"
-        aria-label="Close local import"
+        aria-label="Close music import"
         disabled={busy}
         onClick={onClose}
       />
@@ -145,13 +320,13 @@ export function LocalLibraryImport({
       >
         <div className="local-import__heading">
           <div>
-            <p className="eyebrow">Local filesystem library</p>
-            <h2 id="local-import-title">Create a virtual pressing</h2>
+            <p className="eyebrow">Your private music library</p>
+            <h2 id="local-import-title">Import your music</h2>
           </div>
           <button
             type="button"
             className="local-import__close"
-            aria-label="Close local import"
+            aria-label="Close music import"
             disabled={busy}
             onClick={onClose}
           >
@@ -160,8 +335,9 @@ export function LocalLibraryImport({
         </div>
 
         <p className="local-import__intro">
-          Spotify supplies metadata and the cover. Audio files are selected from
-          this computer and remain in the gitignored local library.
+          Spotify supplies the sleeve and track list. Attach audio from this
+          computer, and verified matches are filled automatically when
+          available.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -174,12 +350,15 @@ export function LocalLibraryImport({
               placeholder="https://open.spotify.com/album/…"
               disabled={busy}
               data-testid="local-import-url"
-              onChange={(event) => setSpotifyUrl(event.currentTarget.value)}
+              onChange={(event) => {
+                setSpotifyUrl(event.currentTarget.value);
+                setRetryAvailable(false);
+              }}
             />
           </label>
 
           <label>
-            <span>Authorized audio files, in track order</span>
+            <span>Your audio files, in track order (optional)</span>
             <input
               type="file"
               multiple
@@ -198,6 +377,21 @@ export function LocalLibraryImport({
               selected · filenames are sorted numerically before matching
             </p>
           ) : null}
+
+          <p
+            className={`local-import__downloader ${
+              downloaderReady ? "is-ready" : ""
+            }`}
+            role="status"
+          >
+            {!downloaderStatus
+              ? "Checking the local audio downloader…"
+              : downloaderReady
+                ? "Verified audio matching is ready."
+                : `${downloaderStatus.issues.join(
+                    " ",
+                  )} Artwork, tracklists, and selected files will still import normally.`}
+          </p>
 
           {spotifyStatus && !spotifyStatus.configured ? (
             <p className="local-import__notice">
@@ -240,13 +434,27 @@ export function LocalLibraryImport({
               disabled={busy || !spotifyUrl.trim()}
               data-testid="local-import-submit"
             >
-              {busy ? "Building pressing…" : "Import locally"}
+              {busy
+                ? "Importing music…"
+                : retryAvailable
+                  ? "Retry import"
+                  : "Import music"}
             </button>
           </div>
         </form>
 
+        <button
+          type="button"
+          className="local-import__manage"
+          disabled={busy}
+          onClick={onOpenAudioManager}
+        >
+          Manage audio for music already on the shelf
+          <span aria-hidden="true">→</span>
+        </button>
+
         <p className="local-import__footnote">
-          Helper: <code>{localLibraryOrigin}</code> · no database
+          Helper: <code>{localLibraryOrigin}</code> · files stay on this computer
         </p>
       </section>
     </div>

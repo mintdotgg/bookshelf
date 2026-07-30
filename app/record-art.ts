@@ -2,8 +2,15 @@ import type {
   CatalogRecord,
   RecordMotif,
   RecordSide,
-  RecordTrack,
 } from "./record-catalog";
+import {
+  getSleeveSpineTextureSize,
+  resolveSleeveDimensions,
+} from "./sleeve-spec";
+import {
+  formatBackCoverTrack,
+  getImportedBackCoverTrackLayout,
+} from "./back-cover-layout";
 
 const displayFace =
   '"Newsreader Variable", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -11,8 +18,14 @@ const sans = '"Inter Variable", Inter, Arial, sans-serif';
 
 const SURFACE_RESOLUTION = 768;
 const LABEL_RESOLUTION = 512;
-const SPINE_WIDTH = 128;
-const SPINE_HEIGHT = 1024;
+
+const importedBackPalette = {
+  paper: "#e9e1d5",
+  paperDeep: "#d7c7b2",
+  ink: "#241f1a",
+  inkMuted: "#675d53",
+  accent: "#8d674b",
+} as const;
 
 type Point = readonly [number, number];
 
@@ -426,11 +439,139 @@ function drawMotif(
   ctx.restore();
 }
 
-function formatTrack(track: RecordTrack) {
-  const prefix = track.side
-    ? `${track.side}${track.sideTrackNumber ?? track.trackNumber}`
-    : String(track.trackNumber).padStart(2, "0");
-  return `${prefix}  ${track.title}`;
+function fitText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+) {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+
+  const ellipsis = "…";
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const midpoint = Math.ceil((low + high) / 2);
+    if (ctx.measureText(`${text.slice(0, midpoint).trimEnd()}${ellipsis}`).width <= maxWidth) {
+      low = midpoint;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+  return `${text.slice(0, low).trimEnd()}${ellipsis}`;
+}
+
+function importedTracklistType(record: CatalogRecord) {
+  if (record.localSource?.provider !== "spotify") return null;
+  return record.localSource.type === "album" ||
+    record.localSource.type === "playlist"
+    ? record.localSource.type
+    : null;
+}
+
+function drawImportedTracklistBackCover(
+  ctx: CanvasRenderingContext2D,
+  record: CatalogRecord,
+  width: number,
+  height: number,
+  sourceType: "album" | "playlist",
+) {
+  const background = ctx.createLinearGradient(0, 0, width, height);
+  background.addColorStop(0, importedBackPalette.paper);
+  background.addColorStop(1, importedBackPalette.paperDeep);
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+  addSleeveGrain(ctx, width, height, `${record.id}:${sourceType}-back`);
+
+  ctx.save();
+  ctx.strokeStyle = importedBackPalette.ink;
+  ctx.globalAlpha = 0.16;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(20, 20, width - 40, height - 40);
+  ctx.restore();
+
+  ctx.fillStyle = importedBackPalette.inkMuted;
+  ctx.textBaseline = "top";
+  ctx.font = `650 11px ${sans}`;
+  ctx.letterSpacing = "2.6px";
+  ctx.fillText(
+    sourceType === "album" ? "ALBUM ARCHIVE" : "PLAYLIST ARCHIVE",
+    59,
+    48,
+  );
+
+  ctx.fillStyle = importedBackPalette.ink;
+  ctx.letterSpacing = "0px";
+  const titleSize = record.title.length > 34 ? 31 : 36;
+  ctx.font = `520 ${titleSize}px ${displayFace}`;
+  wrapText(ctx, record.title, 58, 73, width - 116, titleSize * 1.02, 2);
+
+  ctx.font = `650 12px ${sans}`;
+  ctx.letterSpacing = "1.8px";
+  ctx.fillStyle = importedBackPalette.inkMuted;
+  ctx.fillText(record.artist.toUpperCase(), 59, 164, width - 260);
+
+  ctx.save();
+  ctx.textAlign = "right";
+  ctx.fillText(
+    `${record.tracks.length} ${
+      record.tracks.length === 1 ? "TRACK" : "TRACKS"
+    }`,
+    width - 59,
+    164,
+  );
+  ctx.restore();
+
+  ctx.fillStyle = importedBackPalette.accent;
+  ctx.globalAlpha = 0.92;
+  ctx.fillRect(59, 193, 76, 4);
+
+  const layout = getImportedBackCoverTrackLayout(record.tracks.length);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = importedBackPalette.ink;
+  ctx.font = `560 ${layout.fontSize}px ${sans}`;
+  ctx.letterSpacing = "0px";
+
+  for (let column = 1; column < layout.columnCount; column += 1) {
+    const dividerX =
+      59 +
+      column * (layout.columnWidth + layout.columnGap) -
+      layout.columnGap * 0.5;
+    ctx.save();
+    ctx.globalAlpha = 0.12;
+    ctx.fillRect(
+      dividerX,
+      layout.trackTop - 4,
+      1,
+      layout.trackBottom - layout.trackTop + 8,
+    );
+    ctx.restore();
+  }
+
+  record.tracks.forEach((track, index) => {
+    const column = Math.floor(index / layout.rowsPerColumn);
+    const row = index % layout.rowsPerColumn;
+    const x = 59 + column * (layout.columnWidth + layout.columnGap);
+    const y = layout.trackTop + row * layout.lineHeight;
+    const label = formatBackCoverTrack(track, true);
+    ctx.fillText(fitText(ctx, label, layout.columnWidth), x, y);
+  });
+
+  ctx.fillStyle = importedBackPalette.inkMuted;
+  ctx.font = `550 11px ${sans}`;
+  ctx.letterSpacing = "1.35px";
+  const metadata = [
+    record.catalogNumber,
+    `${record.rpm} RPM`,
+    String(record.year),
+  ]
+    .filter(Boolean)
+    .join("  ·  ");
+  ctx.fillText(metadata.toUpperCase(), 59, height - 82, width - 118);
+
+  if (record.edition) {
+    ctx.letterSpacing = "0.35px";
+    ctx.fillText(record.edition, 59, height - 57, width - 118);
+  }
 }
 
 export function createFrontCover(record: CatalogRecord) {
@@ -489,6 +630,19 @@ export function createBackCover(record: CatalogRecord) {
   if (!ctx) return canvas;
 
   ctx.save();
+  const sourceType = importedTracklistType(record);
+  if (sourceType) {
+    drawImportedTracklistBackCover(
+      ctx,
+      record,
+      canvas.width,
+      canvas.height,
+      sourceType,
+    );
+    ctx.restore();
+    return canvas;
+  }
+
   paintSleeveBase(ctx, record, canvas.width, canvas.height, "back");
   addSleeveGrain(ctx, canvas.width, canvas.height, `${record.id}:back`);
 
@@ -539,7 +693,7 @@ export function createBackCover(record: CatalogRecord) {
     const column = Math.floor(index / tracksPerColumn);
     const row = index % tracksPerColumn;
     ctx.fillText(
-      formatTrack(track),
+      formatBackCoverTrack(track),
       59 + column * (trackColumnWidth + trackColumnGap),
       trackStart + 31 + row * trackLineHeight,
       trackColumnWidth,
@@ -575,7 +729,10 @@ export function createBackCover(record: CatalogRecord) {
 }
 
 export function createSpineCover(record: CatalogRecord) {
-  const canvas = createCanvas(SPINE_WIDTH, SPINE_HEIGHT);
+  const textureSize = getSleeveSpineTextureSize(
+    resolveSleeveDimensions(record),
+  );
+  const canvas = createCanvas(textureSize.width, textureSize.height);
   const ctx = canvas.getContext("2d");
   if (!ctx) return canvas;
 
@@ -585,26 +742,48 @@ export function createSpineCover(record: CatalogRecord) {
 
   ctx.fillStyle = record.accent;
   ctx.globalAlpha = 0.92;
-  ctx.fillRect(14, 19, 5, canvas.height - 38);
+  ctx.fillRect(
+    canvas.width * 0.08,
+    canvas.height * 0.025,
+    Math.max(1, canvas.width * 0.055),
+    canvas.height * 0.95,
+  );
 
   ctx.save();
   ctx.fillStyle = record.ink;
   ctx.globalAlpha = 1;
-  ctx.translate(canvas.width / 2 + 15, canvas.height - 68);
+  ctx.translate(canvas.width / 2, canvas.height / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textBaseline = "middle";
-  ctx.font = `560 ${record.shortTitle.length > 18 ? 43 : 50}px ${displayFace}`;
-  ctx.fillText(record.shortTitle, 0, -10, canvas.height - 184);
-  ctx.font = `560 21px ${sans}`;
-  ctx.letterSpacing = "1.2px";
-  ctx.fillText(record.artist.toUpperCase(), 0, 28, canvas.height - 220);
+  ctx.textAlign = "center";
+  ctx.font = `560 ${Math.max(12, canvas.width * 0.38)}px ${displayFace}`;
+  ctx.letterSpacing = `${Math.max(0.4, canvas.width * 0.012)}px`;
+  ctx.fillText(
+    record.shortTitle,
+    0,
+    -canvas.width * 0.11,
+    canvas.height * 0.72,
+  );
+  ctx.font = `560 ${Math.max(8, canvas.width * 0.18)}px ${sans}`;
+  ctx.letterSpacing = `${Math.max(0.5, canvas.width * 0.018)}px`;
+  ctx.fillText(
+    record.artist.toUpperCase(),
+    0,
+    canvas.width * 0.24,
+    canvas.height * 0.68,
+  );
   ctx.restore();
 
   ctx.fillStyle = record.ink;
   ctx.globalAlpha = 0.72;
   ctx.textAlign = "center";
-  ctx.font = `700 14px ${sans}`;
-  ctx.fillText(record.catalogNumber ?? String(record.year), 69, 31);
+  ctx.font = `700 ${Math.max(7, canvas.width * 0.14)}px ${sans}`;
+  ctx.fillText(
+    record.catalogNumber ?? String(record.year),
+    canvas.width * 0.56,
+    canvas.height * 0.018,
+    canvas.width * 0.72,
+  );
   ctx.restore();
   return canvas;
 }

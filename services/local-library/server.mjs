@@ -27,9 +27,9 @@ function allowedOrigin(origin) {
 
 function applyCors(request, response) {
   const origin = request.headers.origin;
+  response.setHeader("Vary", "Origin");
   if (origin && allowedOrigin(origin)) {
     response.setHeader("Access-Control-Allow-Origin", origin);
-    response.setHeader("Vary", "Origin");
   }
   response.setHeader(
     "Access-Control-Allow-Methods",
@@ -136,6 +136,7 @@ function parseRange(value, size) {
 
 async function serveMedia(request, response, library, segments) {
   const file = library.resolveMediaFile(segments);
+  const requestUrl = new URL(request.url ?? "/", library.baseUrl);
   let stats;
   try {
     stats = await fs.stat(file);
@@ -170,7 +171,11 @@ async function serveMedia(request, response, library, segments) {
   const headers = {
     "Content-Type": mimeTypeForFile(file),
     "Accept-Ranges": "bytes",
-    "Cache-Control": "private, max-age=3600",
+    "Cache-Control": requestUrl.searchParams.has("v")
+      ? "private, max-age=31536000, immutable"
+      : "private, no-cache",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Last-Modified": stats.mtime.toUTCString(),
   };
   let status = 200;
   let start = 0;
@@ -296,6 +301,16 @@ export function createRequestHandler(library) {
         sendJson(response, 200, { records });
         return;
       }
+      if (
+        request.method === "PUT" &&
+        url.pathname === "/v1/catalog/order"
+      ) {
+        assertLocalMutation(request);
+        const body = await readJsonBody(request);
+        const records = await library.setCatalogOrder(body.recordIds);
+        sendJson(response, 200, { records });
+        return;
+      }
 
       const youtubeMatchRecord = url.pathname.match(
         /^\/v1\/records\/([^/]+)\/youtube-match$/,
@@ -391,6 +406,9 @@ export async function startLocalLibraryServer(options = {}) {
       spotifyClientId: options.spotifyClientId,
       spotifyClientSecret: options.spotifyClientSecret,
       spotifyAccessToken: options.spotifyAccessToken,
+      spotifyRequestTimeoutMs: options.spotifyRequestTimeoutMs,
+      spotifyRetryDelaysMs: options.spotifyRetryDelaysMs,
+      sleepImpl: options.sleepImpl,
       ytDlpPath: options.ytDlpPath,
       ffmpegPath: options.ffmpegPath,
       ytDlpJsRuntime: options.ytDlpJsRuntime,
