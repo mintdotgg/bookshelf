@@ -69,9 +69,30 @@ function ArrowIcon({ direction }: { direction: "left" | "right" }) {
 
 function PlayIcon({ paused }: { paused: boolean }) {
   return (
-    <span className="transport-icon" aria-hidden="true">
-      {paused ? "▶" : "Ⅱ"}
-    </span>
+    <span
+      className={`transport-icon transport-icon--${
+        paused ? "play" : "pause"
+      }`}
+      aria-hidden="true"
+    />
+  );
+}
+
+function StopIcon() {
+  return (
+    <span
+      className="transport-icon transport-icon--stop"
+      aria-hidden="true"
+    />
+  );
+}
+
+function NextIcon() {
+  return (
+    <span
+      className="transport-icon transport-icon--next"
+      aria-hidden="true"
+    />
   );
 }
 
@@ -410,6 +431,13 @@ export function VinylLibrary() {
       null,
     [selectedRecord, selectedTrackId],
   );
+  const nextTrack = useMemo(() => {
+    if (!selectedRecord || !selectedTrack) return null;
+    const selectedTrackIndex = selectedRecord.tracks.findIndex(
+      (track) => track.id === selectedTrack.id,
+    );
+    return selectedRecord.tracks[selectedTrackIndex + 1] ?? null;
+  }, [selectedRecord, selectedTrack]);
   const selectedTrackGroups = useMemo(() => {
     if (!selectedRecord) return [];
     return Array.from({ length: selectedRecord.discCount }, (_, index) => {
@@ -1418,7 +1446,7 @@ export function VinylLibrary() {
                               }`}
                               aria-pressed={selectedTrack?.id === track.id}
                               disabled={isBusy}
-                              onClick={() => queueTrack(track, false)}
+                              onClick={() => playTrack(track)}
                             >
                               <span className="track-button__side">
                                 {trackPosition(track)}
@@ -1537,7 +1565,21 @@ export function VinylLibrary() {
             }
             onClick={() => stopPlayback(false)}
           >
-            <span aria-hidden="true">■</span>
+            <StopIcon />
+          </button>
+          <button
+            type="button"
+            className="transport-button transport-button--secondary"
+            data-testid="next-track"
+            aria-label={
+              nextTrack ? `Play next track: ${nextTrack.title}` : "No next track"
+            }
+            disabled={!nextTrack || isBusy}
+            onClick={() => {
+              if (nextTrack) playTrack(nextTrack);
+            }}
+          >
+            <NextIcon />
           </button>
         </div>
 

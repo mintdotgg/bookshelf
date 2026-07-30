@@ -441,6 +441,7 @@ export class RecordShelfEngine {
     this.resizeObserver.observe(canvas);
     this.handleResize();
     this.callbacks.onReady();
+    this.lastTimestamp = performance.now();
     this.animate();
   }
 
@@ -983,6 +984,13 @@ export class RecordShelfEngine {
     this.camera.position.copy(this.focusCameraPosition);
     this.controls.target.copy(this.focusCameraTarget);
     this.camera.lookAt(this.controls.target);
+    if (this.selectedIndex !== null) {
+      const selected = this.runtimeRecords[this.selectedIndex];
+      this.controls.enabled =
+        this.mode === "inspect" &&
+        this.trackTransition === null &&
+        !selected.sleeveFlipping;
+    }
   };
 
   private handleVisibilityChange = () => {

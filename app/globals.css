@@ -1078,8 +1078,10 @@ canvas:focus-visible {
 }
 
 .player__transport {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, 38px);
   gap: 8px;
+  place-content: center;
   align-items: center;
 }
 
@@ -1087,19 +1089,70 @@ canvas:focus-visible {
   display: grid;
   width: 38px;
   height: 38px;
+  padding: 0;
   place-items: center;
   border-radius: 50%;
   background: var(--ink);
   color: var(--paper-light);
   cursor: pointer;
+  line-height: 1;
   transition:
     transform var(--motion-fast) var(--ease-out),
     opacity var(--motion-fast) var(--ease-standard);
 }
 
 .transport-icon {
-  display: inline-block;
+  position: relative;
+  display: grid;
+  width: 14px;
+  height: 14px;
+  place-items: center;
   animation: control-pop var(--motion-fast) var(--ease-out) both;
+}
+
+.transport-icon::before,
+.transport-icon::after {
+  position: absolute;
+  display: block;
+  content: "";
+}
+
+.transport-icon--play::before {
+  left: 3px;
+  border-top: 7px solid transparent;
+  border-bottom: 7px solid transparent;
+  border-left: 10px solid currentColor;
+}
+
+.transport-icon--pause::before {
+  inset: 1px 2px;
+  background:
+    linear-gradient(
+      90deg,
+      currentColor 0 35%,
+      transparent 35% 65%,
+      currentColor 65% 100%
+    );
+}
+
+.transport-icon--stop::before {
+  inset: 3px;
+  background: currentColor;
+}
+
+.transport-icon--next::before {
+  left: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 8px solid currentColor;
+}
+
+.transport-icon--next::after {
+  top: 1px;
+  right: 0;
+  width: 2px;
+  height: 12px;
+  background: currentColor;
 }
 
 .transport-button:hover:not(:disabled) {
@@ -1107,8 +1160,6 @@ canvas:focus-visible {
 }
 
 .transport-button--secondary {
-  width: 31px;
-  height: 31px;
   border: 1px solid var(--hairline);
   background: transparent;
   color: var(--ink);

@@ -150,6 +150,7 @@ test("server-renders the Side One shell with only the requested Mint badge", asy
   assert.match(html, /data-testid="flip-sleeve-browse"/);
   assert.match(html, /data-testid="album-panel"/);
   assert.match(html, /data-testid="preview-player"/);
+  assert.match(html, /data-testid="next-track"/);
   assert.match(html, /data-testid="open-import-music"/);
   assert.doesNotMatch(html, /data-testid="open-local-audio"/);
   assert.match(html, /aria-label="Vinyl audio player"/);
@@ -1904,6 +1905,26 @@ test("playback follows cue motion while preserving the inspected sleeve and trac
   assert.match(
     librarySource,
     /onClick=\{\(\) => \(isPlaying \? pausePlayback\(\) : playTrack\(\)\)\}/,
+  );
+  assert.match(
+    librarySource,
+    /data-testid=\{`track-\$\{track\.id\}`\}[\s\S]*?onClick=\{\(\) => playTrack\(track\)\}/,
+    "clicking a track row immediately starts its playback journey",
+  );
+  assert.match(
+    librarySource,
+    /data-testid="next-track"[\s\S]*?if \(nextTrack\) playTrack\(nextTrack\);/,
+    "the next control advances through the same physical playback journey",
+  );
+  assert.match(
+    styles,
+    /\.player__transport\s*\{[\s\S]*?grid-template-columns:\s*repeat\(3, 38px\);[\s\S]*?place-content:\s*center;/,
+    "all three transport controls use centered equal-width slots",
+  );
+  assert.doesNotMatch(
+    librarySource,
+    /onClick=\{\(\) => queueTrack\(track, false\)\}/,
+    "track rows never stop at selection-only behavior",
   );
   assert.match(librarySource, /is-playing/);
   assert.match(librarySource, /Pause selected track/);
