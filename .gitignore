@@ -50,3 +50,7 @@ next-env.d.ts
 
 # Generated preview audio is committed as a rights-safe starter catalog.
 # Put contributor-owned replacement media under /public/records/.
+
+# Legacy Stripe Press assets may remain in older worktrees but are not part of
+# the Side One catalog.
+/public/assets/stripe-press/
