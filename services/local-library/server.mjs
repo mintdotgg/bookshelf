@@ -12,24 +12,63 @@ import {
 
 const JSON_LIMIT_BYTES = 512 * 1024;
 
-function allowedOrigin(origin) {
+function normalizeAllowedOrigins(values) {
+  const candidates = (Array.isArray(values) ? values : [values])
+    .flatMap((value) => String(value ?? "").split(","))
+    .map((value) => value.trim());
+  const origins = new Set();
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password &&
+        url.pathname === "/" &&
+        !url.search &&
+        !url.hash
+      ) {
+        origins.add(url.origin);
+      }
+    } catch {
+      // Ignore malformed allowlist entries instead of broadening access.
+    }
+  }
+  return origins;
+}
+
+export function resolveAllowedOrigins(options = {}) {
+  return [
+    ...normalizeAllowedOrigins([
+      options.allowedOrigins ?? process.env.LOCAL_LIBRARY_ALLOWED_ORIGINS,
+      options.hostedOrigins ?? process.env.LOCAL_LIBRARY_HOSTED_ORIGINS,
+    ]),
+  ];
+}
+
+function allowedOrigin(origin, allowedOrigins) {
   if (!origin) return true;
   try {
     const url = new URL(origin);
     return (
-      (url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
-      (url.protocol === "http:" || url.protocol === "https:")
+      ((url.hostname === "127.0.0.1" || url.hostname === "localhost") &&
+        (url.protocol === "http:" || url.protocol === "https:")) ||
+      allowedOrigins.has(url.origin)
     );
   } catch {
     return false;
   }
 }
 
-function applyCors(request, response) {
+function applyCors(request, response, allowedOrigins) {
   const origin = request.headers.origin;
   response.setHeader("Vary", "Origin");
-  if (origin && allowedOrigin(origin)) {
+  if (origin && allowedOrigin(origin, allowedOrigins)) {
     response.setHeader("Access-Control-Allow-Origin", origin);
+    if (request.headers["access-control-request-private-network"] === "true") {
+      response.setHeader("Access-Control-Allow-Private-Network", "true");
+    }
   }
   response.setHeader(
     "Access-Control-Allow-Methods",
@@ -41,11 +80,11 @@ function applyCors(request, response) {
   );
 }
 
-function assertLocalMutation(request) {
-  if (!allowedOrigin(request.headers.origin)) {
+function assertLocalMutation(request, allowedOrigins) {
+  if (!allowedOrigin(request.headers.origin, allowedOrigins)) {
     throw new LocalLibraryError(
       "ORIGIN_REJECTED",
-      "Local-library changes are accepted only from a localhost origin.",
+      "Local-library changes are accepted only from localhost or an explicitly allowed origin.",
       403,
     );
   }
@@ -211,9 +250,10 @@ function errorResponse(response, error) {
   });
 }
 
-export function createRequestHandler(library) {
+export function createRequestHandler(library, options = {}) {
+  const allowedOrigins = new Set(resolveAllowedOrigins(options));
   return async function requestHandler(request, response) {
-    applyCors(request, response);
+    applyCors(request, response, allowedOrigins);
     if (request.method === "OPTIONS") {
       response.writeHead(204);
       response.end();
@@ -285,7 +325,7 @@ export function createRequestHandler(library) {
         return;
       }
       if (request.method === "POST" && url.pathname === "/v1/imports") {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const body = await readJsonBody(request);
         const imported = await library.importSpotify(body.spotifyUrl);
         sendJson(response, imported.duplicate ? 200 : 201, imported);
@@ -295,7 +335,7 @@ export function createRequestHandler(library) {
         request.method === "POST" &&
         url.pathname === "/v1/catalog-records/sync"
       ) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const body = await readJsonBody(request);
         const records = await library.syncCatalogRecords(body.records);
         sendJson(response, 200, { records });
@@ -305,7 +345,7 @@ export function createRequestHandler(library) {
         request.method === "PUT" &&
         url.pathname === "/v1/catalog/order"
       ) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const body = await readJsonBody(request);
         const records = await library.setCatalogOrder(body.recordIds);
         sendJson(response, 200, { records });
@@ -316,7 +356,7 @@ export function createRequestHandler(library) {
         /^\/v1\/records\/([^/]+)\/youtube-match$/,
       );
       if (request.method === "POST" && youtubeMatchRecord) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const body = await readJsonBody(request);
         const result = await library.matchYouTubeRecord(
           decodeURIComponent(youtubeMatchRecord[1]),
@@ -333,7 +373,7 @@ export function createRequestHandler(library) {
         /^\/v1\/records\/([^/]+)\/tracks\/([^/]+)\/youtube-download$/,
       );
       if (request.method === "POST" && youtubeDownloadMatch) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const body = await readJsonBody(request);
         const record = await library.downloadYouTubeAudio(
           decodeURIComponent(youtubeDownloadMatch[1]),
@@ -349,7 +389,7 @@ export function createRequestHandler(library) {
         /^\/v1\/records\/([^/]+)\/tracks\/([^/]+)\/audio$/,
       );
       if (request.method === "PUT" && audioMatch) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         const record = await library.uploadAudio(
           decodeURIComponent(audioMatch[1]),
           decodeURIComponent(audioMatch[2]),
@@ -369,7 +409,7 @@ export function createRequestHandler(library) {
 
       const recordMatch = url.pathname.match(/^\/v1\/records\/([^/]+)$/);
       if (request.method === "DELETE" && recordMatch) {
-        assertLocalMutation(request);
+        assertLocalMutation(request, allowedOrigins);
         await library.removeRecord(decodeURIComponent(recordMatch[1]));
         response.writeHead(204);
         response.end();
@@ -418,7 +458,12 @@ export async function startLocalLibraryServer(options = {}) {
       youtubeSearcher: options.youtubeSearcher,
     });
   await library.init();
-  const server = http.createServer(createRequestHandler(library));
+  const server = http.createServer(
+    createRequestHandler(library, {
+      allowedOrigins: options.allowedOrigins,
+      hostedOrigins: options.hostedOrigins,
+    }),
+  );
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
@@ -427,12 +472,17 @@ export async function startLocalLibraryServer(options = {}) {
   const resolvedPort =
     typeof address === "object" && address ? address.port : port;
   const origin = `http://${host}:${resolvedPort}`;
+  const allowedOrigins = resolveAllowedOrigins({
+    allowedOrigins: options.allowedOrigins,
+    hostedOrigins: options.hostedOrigins,
+  });
   library.setBaseUrl(origin);
 
   return {
     server,
     library,
     origin,
+    allowedOrigins,
     close: () =>
       new Promise((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -447,6 +497,12 @@ const isMain =
 if (isMain) {
   const running = await startLocalLibraryServer();
   console.log(
-    `Side One local library: ${running.origin}\nFilesystem: ${running.library.root}`,
+    `Side One local library: ${running.origin}\nFilesystem: ${
+      running.library.root
+    }\nHosted browser origins: ${
+      running.allowedOrigins.length
+        ? running.allowedOrigins.join(", ")
+        : "localhost only"
+    }`,
   );
 }

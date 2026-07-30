@@ -8,6 +8,7 @@ import {
   matchLocalRecord,
 } from "./local-library";
 import type { LocalDownloaderStatus } from "./local-library";
+import { usePresence } from "./use-presence";
 
 type LocalAudioManagerProps = {
   open: boolean;
@@ -72,6 +73,7 @@ export function LocalAudioManager({
   const [error, setError] = useState<string | null>(null);
   const [downloaderStatus, setDownloaderStatus] =
     useState<LocalDownloaderStatus | null>(null);
+  const presence = usePresence(open);
 
   useEffect(() => {
     if (!open) return;
@@ -134,7 +136,7 @@ export function LocalAudioManager({
     };
   }, [snapshot]);
 
-  if (!open) return null;
+  if (!presence.mounted) return null;
 
   const updateSnapshot = (record: CatalogRecord) => {
     setSnapshot((current) => replaceRecord(current, record));
@@ -253,16 +255,21 @@ export function LocalAudioManager({
   const downloaderReady = downloaderStatus?.ready === true;
 
   return (
-    <div className="local-import local-audio-manager">
+    <div
+      className={`local-import local-audio-manager motion-overlay is-${presence.state}`}
+      data-motion-state={presence.state}
+      aria-hidden={!open}
+      inert={open ? undefined : true}
+    >
       <button
         type="button"
-        className="local-import__backdrop"
+        className="local-import__backdrop motion-backdrop"
         aria-label="Close local audio manager"
         disabled={Boolean(working)}
         onClick={onClose}
       />
       <section
-        className="local-import__dialog local-audio-manager__dialog"
+        className="local-import__dialog local-audio-manager__dialog motion-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="local-audio-title"

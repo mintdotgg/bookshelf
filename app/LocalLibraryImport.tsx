@@ -14,6 +14,7 @@ import {
   type LocalDownloaderStatus,
   type LocalSpotifyStatus,
 } from "./local-library";
+import { usePresence } from "./use-presence";
 
 type LocalLibraryImportProps = {
   open: boolean;
@@ -81,6 +82,7 @@ export function LocalLibraryImport({
   );
   const [error, setError] = useState<string | null>(null);
   const [retryAvailable, setRetryAvailable] = useState(false);
+  const [confirmedOwnership, setConfirmedOwnership] = useState(false);
   const [spotifyStatus, setSpotifyStatus] =
     useState<LocalSpotifyStatus | null>(null);
   const [downloaderStatus, setDownloaderStatus] =
@@ -88,6 +90,7 @@ export function LocalLibraryImport({
 
   const sortedFiles = useMemo(() => sortFiles(files), [files]);
   const downloaderReady = downloaderStatus?.ready === true;
+  const presence = usePresence(open);
 
   useEffect(() => {
     if (!open) return;
@@ -95,6 +98,7 @@ export function LocalLibraryImport({
     queueMicrotask(() => {
       if (cancelled) return;
       setDownloaderStatus(null);
+      setConfirmedOwnership(false);
     });
     void fetchLocalSpotifyStatus()
       .then((nextStatus) => {
@@ -143,7 +147,7 @@ export function LocalLibraryImport({
     };
   }, [busy, onClose, open]);
 
-  if (!open) return null;
+  if (!presence.mounted) return null;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -153,7 +157,7 @@ export function LocalLibraryImport({
     setRetryAvailable(false);
     setStatus("Reading Spotify metadata and saving the cover locally");
     let libraryNeedsRefresh = false;
-    let automaticAudioReady = downloaderReady;
+    let automaticAudioReady = downloaderReady && confirmedOwnership;
 
     try {
       if (!downloaderStatus) {
@@ -162,7 +166,8 @@ export function LocalLibraryImport({
         );
         if (latestDownloaderStatus) {
           setDownloaderStatus(latestDownloaderStatus);
-          automaticAudioReady = latestDownloaderStatus.ready;
+          automaticAudioReady =
+            latestDownloaderStatus.ready && confirmedOwnership;
         }
       }
       const imported = await importSpotifyMetadata(spotifyUrl);
@@ -232,7 +237,7 @@ export function LocalLibraryImport({
             record.id,
             track.id,
             null,
-            true,
+            confirmedOwnership,
           );
           latestRecords.set(updated.id, updated);
           downloaded += 1;
@@ -304,16 +309,22 @@ export function LocalLibraryImport({
   };
 
   return (
-    <div className="local-import" data-testid="local-import-overlay">
+    <div
+      className={`local-import motion-overlay is-${presence.state}`}
+      data-testid="local-import-overlay"
+      data-motion-state={presence.state}
+      aria-hidden={!open}
+      inert={open ? undefined : true}
+    >
       <button
         type="button"
-        className="local-import__backdrop"
+        className="local-import__backdrop motion-backdrop"
         aria-label="Close music import"
         disabled={busy}
         onClick={onClose}
       />
       <section
-        className="local-import__dialog"
+        className="local-import__dialog motion-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="local-import-title"
@@ -336,8 +347,8 @@ export function LocalLibraryImport({
 
         <p className="local-import__intro">
           Spotify supplies the sleeve and track list. Attach audio from this
-          computer, and verified matches are filled automatically when
-          available.
+          computer, or explicitly authorize verified matches to be downloaded
+          automatically.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -392,6 +403,29 @@ export function LocalLibraryImport({
                     " ",
                   )} Artwork, tracklists, and selected files will still import normally.`}
           </p>
+
+          {downloaderReady ? (
+            <>
+              <label className="youtube-download__authorization">
+                <input
+                  type="checkbox"
+                  checked={confirmedOwnership}
+                  disabled={busy}
+                  data-testid="local-import-download-confirm"
+                  onChange={(event) =>
+                    setConfirmedOwnership(event.currentTarget.checked)
+                  }
+                />
+                <span>
+                  I own this media or have permission to download and keep it.
+                </span>
+              </label>
+              <p className="local-import__notice">
+                Leave this unchecked to import only Spotify metadata, cover art,
+                and any audio files you selected.
+              </p>
+            </>
+          ) : null}
 
           {spotifyStatus && !spotifyStatus.configured ? (
             <p className="local-import__notice">

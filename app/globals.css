@@ -16,6 +16,13 @@
   --hairline: var(--line);
   --serif: "Newsreader Variable", "Iowan Old Style", Georgia, serif;
   --sans: "Inter Variable", Inter, Helvetica, Arial, sans-serif;
+  --motion-instant: 120ms;
+  --motion-fast: 180ms;
+  --motion-medium: 280ms;
+  --motion-slow: 440ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 * {
@@ -104,8 +111,8 @@ canvas:focus-visible {
 
   position: absolute;
   z-index: 21;
-  top: var(--vinyl-play-y);
-  left: var(--vinyl-play-x);
+  top: 0;
+  left: 0;
   display: grid;
   width: 82px;
   height: 82px;
@@ -123,18 +130,22 @@ canvas:focus-visible {
   cursor: pointer;
   opacity: 0;
   pointer-events: none;
-  transform: translate3d(-50%, -50%, 0) scale(0.72);
+  scale: 0.72;
+  transform:
+    translate3d(var(--vinyl-play-x), var(--vinyl-play-y), 0)
+    translate3d(-50%, -50%, 0);
   transition:
-    opacity 260ms ease,
-    transform 420ms cubic-bezier(0.22, 1, 0.36, 1),
-    background-color 180ms ease,
-    box-shadow 180ms ease;
+    opacity var(--motion-medium) var(--ease-standard),
+    scale var(--motion-slow) var(--ease-emphasized),
+    background-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
+  will-change: transform;
 }
 
 .is-focused .vinyl-play-button.has-preview[data-anchored="true"] {
   opacity: 1;
   pointer-events: auto;
-  transform: translate3d(-50%, -50%, 0) scale(1);
+  scale: 1;
 }
 
 .vinyl-play-button:hover:not(:disabled) {
@@ -143,7 +154,7 @@ canvas:focus-visible {
     0 22px 54px rgb(20 17 12 / 34%),
     0 0 0 8px color-mix(in srgb, var(--accent) 16%, transparent),
     inset 0 0 0 5px rgb(245 239 227 / 10%);
-  transform: translate3d(-50%, -50%, 0) scale(1.055);
+  scale: 1.055;
 }
 
 .vinyl-play-button:disabled {
@@ -240,11 +251,11 @@ canvas:focus-visible {
   justify-content: space-between;
   padding: 25px clamp(22px, 3.4vw, 56px);
   pointer-events: none;
-  transition: right 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--motion-slow) var(--ease-emphasized);
 }
 
 .is-focused .archive-header {
-  right: var(--album-panel-width);
+  transform: translate3d(calc(var(--album-panel-width) * -0.08), 0, 0);
 }
 
 .is-focused .archive-header__actions .local-import-trigger,
@@ -333,8 +344,12 @@ canvas:focus-visible {
   isolation: isolate;
   pointer-events: none;
   transition:
-    opacity 380ms ease,
-    transform 500ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-medium) var(--ease-standard),
+    transform var(--motion-slow) var(--ease-emphasized);
+}
+
+.browse-caption__copy {
+  animation: content-settle var(--motion-medium) var(--ease-out) both;
 }
 
 .browse-caption::before {
@@ -485,9 +500,9 @@ canvas:focus-visible {
   pointer-events: auto;
   backdrop-filter: blur(10px);
   transition:
-    opacity 240ms ease,
-    transform 240ms ease,
-    background-color 180ms ease;
+    opacity var(--motion-fast) var(--ease-standard),
+    transform var(--motion-fast) var(--ease-out),
+    background-color var(--motion-fast) var(--ease-standard);
 }
 
 .archive-arrow:hover:not(:disabled) {
@@ -599,8 +614,8 @@ canvas:focus-visible {
   gap: 38px;
   align-items: end;
   transition:
-    opacity 280ms ease,
-    transform 400ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-medium) var(--ease-standard),
+    transform var(--motion-slow) var(--ease-emphasized);
 }
 
 .is-focused .archive-index {
@@ -689,8 +704,9 @@ canvas:focus-visible {
   pointer-events: none;
   transform: translate3d(38px, 0, 0);
   transition:
-    opacity 380ms ease,
-    transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+    opacity var(--motion-medium) var(--ease-standard),
+    transform var(--motion-slow) var(--ease-emphasized);
+  will-change: transform, opacity;
 }
 
 .album-panel::before {
@@ -2241,6 +2257,77 @@ input[type="range"] {
 
   .turntable-settings__choices {
     grid-template-columns: 1fr;
+  }
+}
+
+.made-with-mint {
+  position: absolute;
+  z-index: 15;
+  bottom: max(28px, env(safe-area-inset-bottom));
+  left: clamp(22px, 3vw, 48px);
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 30px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-light) 82%, transparent);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink-soft);
+  pointer-events: none;
+  font-size: 8px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+  backdrop-filter: blur(8px);
+  transition:
+    bottom 320ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 180ms ease;
+}
+
+.made-with-mint__logo {
+  display: block;
+  width: 36px;
+  height: auto;
+  fill: currentColor;
+}
+
+.made-with-mint__link {
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+  pointer-events: auto;
+  transition:
+    color 180ms ease,
+    transform 180ms ease;
+}
+
+.made-with-mint__link:hover {
+  color: var(--ink);
+  transform: translateY(-1px);
+}
+
+.is-focused .made-with-mint {
+  bottom: max(96px, env(safe-area-inset-bottom));
+}
+
+@media (max-width: 760px) {
+  .made-with-mint {
+    bottom: max(76px, calc(66px + env(safe-area-inset-bottom)));
+    left: 14px;
+    min-height: 26px;
+    padding: 6px 9px;
+    font-size: 7px;
+  }
+
+  .made-with-mint__logo {
+    width: 32px;
+  }
+
+  .is-focused .made-with-mint {
+    opacity: 0;
   }
 }
 

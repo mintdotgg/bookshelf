@@ -20,7 +20,14 @@ import {
   sanitizeYtDlpOutput,
   scoreYouTubeCandidate,
 } from "./library.mjs";
-import { startLocalLibraryServer } from "./server.mjs";
+import {
+  resolveAllowedOrigins,
+  startLocalLibraryServer,
+} from "./server.mjs";
+import {
+  configuredBrowserOrigins,
+  inspectLocalLibrary,
+} from "../../scripts/dev-local.mjs";
 
 const albumId = "4aawyAB9vmqN3uQ7FjRGTy";
 const fixtureCoverPng = Buffer.from(
@@ -277,6 +284,128 @@ test("returns an actionable Spotify unavailable error without disturbing the cat
     if (running) await running.close();
     await fs.rm(root, { recursive: true, force: true });
   }
+});
+
+test("allows an explicitly configured hosted origin without opening the loopback helper to other sites", async () => {
+  const { recordCatalog } = await import("../../app/record-catalog.ts");
+  const root = await fs.mkdtemp(
+    path.join(os.tmpdir(), "side-one-hosted-origin-"),
+  );
+  let running;
+  try {
+    const hostedOrigin = "https://side-one-vinyl.vercel.app";
+    running = await startLocalLibraryServer({
+      port: 0,
+      root,
+      allowedOrigins: ["http://127.0.0.1:3005"],
+      hostedOrigins: [hostedOrigin],
+    });
+    assert.deepEqual(running.allowedOrigins, [
+      "http://127.0.0.1:3005",
+      hostedOrigin,
+    ]);
+
+    const preflight = await fetch(`${running.origin}/v1/catalog`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: hostedOrigin,
+        "Access-Control-Request-Private-Network": "true",
+      },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(
+      preflight.headers.get("access-control-allow-origin"),
+      hostedOrigin,
+    );
+    assert.equal(
+      preflight.headers.get("access-control-allow-private-network"),
+      "true",
+    );
+
+    const allowedMutation = await fetch(
+      `${running.origin}/v1/catalog-records/sync`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: hostedOrigin,
+        },
+        body: JSON.stringify({ records: recordCatalog }),
+      },
+    );
+    assert.equal(allowedMutation.status, 200);
+
+    const blockedOrigin = "https://untrusted.example";
+    const blockedMutation = await fetch(
+      `${running.origin}/v1/catalog-records/sync`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: blockedOrigin,
+        },
+        body: JSON.stringify({ records: [] }),
+      },
+    );
+    assert.equal(blockedMutation.status, 403);
+    assert.equal(
+      blockedMutation.headers.get("access-control-allow-origin"),
+      null,
+    );
+    assert.equal((await blockedMutation.json()).code, "ORIGIN_REJECTED");
+  } finally {
+    if (running) await running.close();
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("merges hosted origins with runtime overrides and rejects stale helpers during startup inspection", async () => {
+  const hostedOrigin = "https://side-one-vinyl.vercel.app";
+  const runtimeOrigin = "http://127.0.0.1:3005";
+  assert.deepEqual(
+    resolveAllowedOrigins({
+      allowedOrigins: `${runtimeOrigin},not-an-origin`,
+      hostedOrigins: `${hostedOrigin},${hostedOrigin}`,
+    }),
+    [runtimeOrigin, hostedOrigin],
+  );
+  assert.deepEqual(
+    configuredBrowserOrigins({
+      LOCAL_LIBRARY_ALLOWED_ORIGINS: runtimeOrigin,
+      LOCAL_LIBRARY_HOSTED_ORIGINS: hostedOrigin,
+    }),
+    [runtimeOrigin, hostedOrigin],
+  );
+
+  const stale = await inspectLocalLibrary({
+    origin: "http://127.0.0.1:4317",
+    browserOrigins: [hostedOrigin],
+    fetchImpl: async (_url, init = {}) =>
+      init.method === "OPTIONS"
+        ? new Response(null, { status: 204 })
+        : jsonResponse({ records: [] }),
+  });
+  assert.equal(stale.reachable, true);
+  assert.equal(stale.ready, false);
+  assert.deepEqual(stale.missingOrigins, [hostedOrigin]);
+
+  const ready = await inspectLocalLibrary({
+    origin: "http://127.0.0.1:4317",
+    browserOrigins: [hostedOrigin],
+    fetchImpl: async (_url, init = {}) =>
+      init.method === "OPTIONS"
+        ? new Response(null, {
+            status: 204,
+            headers: {
+              "Access-Control-Allow-Origin": hostedOrigin,
+              "Access-Control-Allow-Private-Network": "true",
+            },
+          })
+        : jsonResponse({ records: [] }),
+  });
+  assert.equal(ready.reachable, true);
+  assert.equal(ready.ready, true);
+  assert.deepEqual(ready.missingOrigins, []);
 });
 
 test("keeps Spotify authentication and rate-limit responses specific", async () => {

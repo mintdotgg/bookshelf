@@ -54,6 +54,10 @@ import {
   type TurntableVariantId,
 } from "./turntable-variants";
 import { shouldResumeTrackTransition } from "./track-transition";
+import {
+  overlayExitDurationMs,
+  usePresence,
+} from "./use-presence";
 
 function ArrowIcon({ direction }: { direction: "left" | "right" }) {
   return (
@@ -65,9 +69,28 @@ function ArrowIcon({ direction }: { direction: "left" | "right" }) {
 
 function PlayIcon({ paused }: { paused: boolean }) {
   return (
-    <span aria-hidden="true">
+    <span
+      key={paused ? "play" : "pause"}
+      className="transport-icon"
+      aria-hidden="true"
+    >
       {paused ? "▶" : "Ⅱ"}
     </span>
+  );
+}
+
+function MintWordmark() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="made-with-mint__logo"
+      viewBox="0 0 764 273"
+    >
+      <path d="M0 218.182H54.5455V272.727H0V218.182ZM0 163.636H54.5455V218.182H0V163.636ZM0 109.091H54.5455V163.636H0V109.091ZM0 54.5455H54.5455V109.091H0V54.5455ZM54.5455 54.5455H109.091V109.091H54.5455V54.5455ZM109.091 109.091H163.636V163.636H109.091V109.091ZM109.091 163.636H163.636V218.182H109.091V163.636ZM109.091 218.182H163.636V272.727H109.091V218.182ZM163.636 54.5455H218.182V109.091H163.636V54.5455ZM218.182 109.091H272.727V163.636H218.182V109.091ZM218.182 163.636H272.727V218.182H218.182V163.636ZM218.182 218.182H272.727V272.727H218.182V218.182Z" />
+      <path d="M327.539 218.182H382.085V272.727H327.539V218.182ZM327.539 163.636H382.085V218.182H327.539V163.636ZM327.539 109.091H382.085V163.636H327.539V109.091ZM327.539 0H382.085V54.5455H327.539V0Z" />
+      <path d="M436.523 218.182H491.069V272.727H436.523V218.182ZM436.523 163.636H491.069V218.182H436.523V163.636ZM436.523 109.091H491.069V163.636H436.523V109.091ZM436.523 54.5455H491.069V109.091H436.523V54.5455ZM491.069 54.5455H545.614V109.091H491.069V54.5455ZM545.614 109.091H600.16V163.636H545.614V109.091ZM545.614 163.636H600.16V218.182H545.614V163.636ZM545.614 218.182H600.16V272.727H545.614V218.182Z" />
+      <path d="M654.492 0H709.038V54.5455H654.492V0ZM654.492 54.5455H709.038V109.091H654.492V54.5455ZM654.492 109.091H709.038V163.636H654.492V109.091ZM654.492 163.636H709.038V218.182H654.492V163.636ZM654.492 218.182H709.038V272.727H654.492V218.182ZM709.038 218.182H763.583V272.727H709.038V218.182ZM709.038 54.5455H763.583V109.091H709.038V54.5455Z" />
+    </svg>
   );
 }
 
@@ -212,6 +235,7 @@ export function VinylLibrary() {
   const [deletingRecordId, setDeletingRecordId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [status, setStatus] = useState("Preparing the collection");
+  const settingsPresence = usePresence(settingsOpen);
   const closeLocalImport = useCallback(() => setImportOpen(false), []);
   const closeLocalAudio = useCallback(() => setLocalAudioOpen(false), []);
   const openLocalAudio = useCallback(() => {
@@ -224,7 +248,10 @@ export function VinylLibrary() {
   );
   const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-    window.setTimeout(() => settingsTriggerRef.current?.focus(), 0);
+    window.setTimeout(
+      () => settingsTriggerRef.current?.focus(),
+      overlayExitDurationMs,
+    );
   }, []);
   const openRearrange = useCallback(() => {
     if (
@@ -258,7 +285,10 @@ export function VinylLibrary() {
     setRearrangeOpen(false);
     setRearrangeError(null);
     setStatus("Shelf order unchanged");
-    window.setTimeout(() => rearrangeTriggerRef.current?.focus(), 0);
+    window.setTimeout(
+      () => rearrangeTriggerRef.current?.focus(),
+      overlayExitDurationMs,
+    );
   }, []);
 
   const refreshLocalLibrary = useCallback(async () => {
@@ -1137,18 +1167,37 @@ export function VinylLibrary() {
         </div>
       </header>
 
+      <div
+        className="made-with-mint"
+        data-testid="made-with-mint"
+        aria-label="Made with Mint"
+      >
+        <span aria-hidden="true">Made with</span>
+        <a
+          className="made-with-mint__link"
+          href="https://mint.gg"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Visit Mint"
+        >
+          <MintWordmark />
+        </a>
+      </div>
+
       <section
         className="browse-caption"
         aria-hidden={isFocused}
         data-testid="browse-caption"
       >
-        <p className="eyebrow">
-          <span>{String(activeIndex + 1).padStart(2, "0")}</span>
-          <span className="eyebrow__line" />
-          <span>{String(records.length).padStart(2, "0")}</span>
-        </p>
-        <h1>{activeRecord.shortTitle}</h1>
-        <p className="browse-caption__artist">{activeRecord.artist}</p>
+        <div className="browse-caption__copy" key={activeRecord.id}>
+          <p className="eyebrow">
+            <span>{String(activeIndex + 1).padStart(2, "0")}</span>
+            <span className="eyebrow__line" />
+            <span>{String(records.length).padStart(2, "0")}</span>
+          </p>
+          <h1>{activeRecord.shortTitle}</h1>
+          <p className="browse-caption__artist">{activeRecord.artist}</p>
+        </div>
         <div className="browse-caption__actions">
           <button
             type="button"
@@ -1497,7 +1546,10 @@ export function VinylLibrary() {
         </div>
 
         <div className="player__main">
-          <div className="player__track">
+          <div
+            className="player__track"
+            key={selectedTrack?.id ?? "no-track"}
+          >
             <strong>{selectedTrack?.title ?? "Select a track"}</strong>
             <span>{selectedRecord?.artist}</span>
           </div>
@@ -1552,7 +1604,9 @@ export function VinylLibrary() {
         data-testid="experience-status"
       >
         <span className="experience-status__dot" />
-        <span>{playback.error ?? status}</span>
+        <span className="experience-status__message" key={playback.error ?? status}>
+          {playback.error ?? status}
+        </span>
       </div>
 
       <div className="loading-screen" aria-hidden={ready}>
@@ -1562,16 +1616,21 @@ export function VinylLibrary() {
 
       <p className="independent-note">{siteConfig.independentNote}</p>
 
-      {settingsOpen ? (
-        <div className="turntable-settings">
+      {settingsPresence.mounted ? (
+        <div
+          className={`turntable-settings motion-overlay is-${settingsPresence.state}`}
+          data-motion-state={settingsPresence.state}
+          aria-hidden={!settingsOpen}
+          inert={settingsOpen ? undefined : true}
+        >
           <button
             type="button"
-            className="turntable-settings__backdrop"
+            className="turntable-settings__backdrop motion-backdrop"
             aria-label="Close player settings"
             onClick={closeSettings}
           />
           <section
-            className="turntable-settings__dialog"
+            className="turntable-settings__dialog motion-dialog"
             role="dialog"
             aria-modal="true"
             aria-labelledby="turntable-settings-title"
@@ -1673,20 +1732,13 @@ export function VinylLibrary() {
         onCancel={closeRearrange}
         onSave={saveRecordOrder}
       />
-      {localAudioOpen ? (
-        <LocalAudioManager
-          open
-          records={records}
-          onClose={closeLocalAudio}
-          onLibraryChanged={refreshLocalLibrary}
-        />
-      ) : null}
+      <LocalAudioManager
+        open={localAudioOpen}
+        records={records}
+        onClose={closeLocalAudio}
+        onLibraryChanged={refreshLocalLibrary}
+      />
       <YouTubeDownloadDialog
-        key={
-          youtubeDownloadTarget
-            ? `${youtubeDownloadTarget.recordId}:${youtubeDownloadTarget.trackId}`
-            : "closed"
-        }
         target={youtubeDownloadTarget}
         onClose={closeYouTubeDownload}
         onLibraryChanged={refreshLocalLibrary}

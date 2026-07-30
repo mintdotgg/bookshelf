@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -15,6 +16,7 @@ import {
   orderRecordsById,
   sameRecordOrder,
 } from "./record-order";
+import { usePresence } from "./use-presence";
 
 type RearrangeLibraryProps = {
   open: boolean;
@@ -45,6 +47,7 @@ export function RearrangeLibrary({
   const dialogRef = useRef<HTMLElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  const pendingPositionsRef = useRef<Map<string, DOMRect> | null>(null);
   const sourceOrder = useMemo(
     () => records.map((record) => record.id),
     [records],
@@ -52,6 +55,7 @@ export function RearrangeLibrary({
   const [draftOrder, setDraftOrder] = useState(sourceOrder);
   const [draggedRecordId, setDraggedRecordId] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const presence = usePresence(open);
 
   useEffect(() => {
     if (!open) return;
@@ -111,7 +115,37 @@ export function RearrangeLibrary({
     };
   }, [onCancel, open, saving]);
 
-  if (!open) return null;
+  useLayoutEffect(() => {
+    const previous = pendingPositionsRef.current;
+    const list = listRef.current;
+    pendingPositionsRef.current = null;
+    if (!previous || !list) return;
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    if (reduceMotion) return;
+
+    list.querySelectorAll<HTMLElement>("[data-rearrange-id]").forEach((item) => {
+      const before = previous.get(item.dataset.rearrangeId ?? "");
+      if (!before) return;
+      const after = item.getBoundingClientRect();
+      const deltaY = before.top - after.top;
+      if (Math.abs(deltaY) < 0.5) return;
+      const scale = item.classList.contains("is-dragging") ? 1.01 : 1;
+      item.animate(
+        [
+          { transform: `translate3d(0, ${deltaY}px, 0) scale(${scale})` },
+          { transform: `translate3d(0, 0, 0) scale(${scale})` },
+        ],
+        {
+          duration: 240,
+          easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+        },
+      );
+    });
+  }, [draftOrder]);
+
+  if (!presence.mounted) return null;
 
   const draftRecords = orderRecordsById(records, draftOrder);
   const dirty = !sameRecordOrder(sourceOrder, draftOrder);
@@ -126,6 +160,16 @@ export function RearrangeLibrary({
   const moveRecord = (recordId: string, targetIndex: number) => {
     const next = moveRecordId(draftOrder, recordId, targetIndex);
     if (sameRecordOrder(draftOrder, next)) return;
+    pendingPositionsRef.current = new Map(
+      Array.from(
+        listRef.current?.querySelectorAll<HTMLElement>(
+          "[data-rearrange-id]",
+        ) ?? [],
+      ).map((item) => [
+        item.dataset.rearrangeId ?? "",
+        item.getBoundingClientRect(),
+      ]),
+    );
     setDraftOrder(next);
     announceMove(recordId, next.indexOf(recordId));
   };
@@ -201,10 +245,16 @@ export function RearrangeLibrary({
   };
 
   return (
-    <div className="rearrange-library" data-testid="rearrange-library">
+    <div
+      className={`rearrange-library motion-overlay is-${presence.state}`}
+      data-testid="rearrange-library"
+      data-motion-state={presence.state}
+      aria-hidden={!open}
+      inert={open ? undefined : true}
+    >
       <button
         type="button"
-        className="rearrange-library__backdrop"
+        className="rearrange-library__backdrop motion-backdrop"
         aria-label="Cancel rearranging records"
         tabIndex={-1}
         disabled={saving}
@@ -212,7 +262,7 @@ export function RearrangeLibrary({
       />
       <section
         ref={dialogRef}
-        className="rearrange-library__dialog"
+        className="rearrange-library__dialog motion-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="rearrange-library-title"

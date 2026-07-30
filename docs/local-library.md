@@ -76,6 +76,23 @@ The helper binds to `127.0.0.1:4317`; it is not exposed to the network. Set
 `LOCAL_VINYL_LIBRARY_DIR` to move the media root or
 `NEXT_PUBLIC_LOCAL_LIBRARY_URL` to change the browser-facing helper URL.
 
+When the frontend is hosted, allow only its exact HTTPS origin to call the
+loopback helper:
+
+```dotenv
+LOCAL_LIBRARY_HOSTED_ORIGINS=https://side-one-vinyl.vercel.app
+```
+
+Multiple exact origins may be comma-separated. Localhost origins remain
+allowed automatically. Wildcards and origins containing paths, credentials,
+queries, or fragments are ignored. `LOCAL_LIBRARY_HOSTED_ORIGINS` is merged
+with the optional runtime `LOCAL_LIBRARY_ALLOWED_ORIGINS` value so a temporary
+development override cannot remove the hosted site.
+
+If the hosted app reports that it could not reach the helper, stop any existing
+Side One process and restart it. Startup validates the configured origins
+before reusing a helper that is already listening on port 4317.
+
 ## Import a pressing
 
 1. Choose **Import music**.

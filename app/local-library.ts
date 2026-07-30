@@ -17,6 +17,31 @@ export class LocalLibraryApiError extends Error {
   }
 }
 
+type LocalNetworkRequestInit = RequestInit & {
+  targetAddressSpace?: "loopback";
+};
+
+async function fetchLocalLibrary(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  try {
+    return await fetch(input, {
+      ...init,
+      targetAddressSpace: "loopback",
+    } as LocalNetworkRequestInit);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    const browserOrigin =
+      typeof window === "undefined" ? "this site" : window.location.origin;
+    throw new LocalLibraryApiError(
+      `Side One could not reach the local music helper at ${localLibraryOrigin}. Start the helper, grant browser Local Network Access, and include ${browserOrigin} in LOCAL_LIBRARY_HOSTED_ORIGINS.`,
+      "LOCAL_LIBRARY_UNREACHABLE",
+      0,
+    );
+  }
+}
+
 type ImportResult = {
   duplicate: boolean;
   records: CatalogRecord[];
@@ -114,7 +139,7 @@ function validateRecords(value: unknown): CatalogRecord[] {
 }
 
 export async function fetchLocalCatalog(): Promise<CatalogRecord[]> {
-  const response = await fetch(`${localLibraryOrigin}/v1/catalog`, {
+  const response = await fetchLocalLibrary(`${localLibraryOrigin}/v1/catalog`, {
     cache: "no-store",
   });
   const result = await readResponse<{ records: unknown }>(response);
@@ -124,11 +149,14 @@ export async function fetchLocalCatalog(): Promise<CatalogRecord[]> {
 export async function syncCatalogRecords(
   records: CatalogRecord[],
 ): Promise<CatalogRecord[]> {
-  const response = await fetch(`${localLibraryOrigin}/v1/catalog-records/sync`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ records }),
-  });
+  const response = await fetchLocalLibrary(
+    `${localLibraryOrigin}/v1/catalog-records/sync`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records }),
+    },
+  );
   const result = await readResponse<{ records: unknown }>(response);
   return validateRecords(result.records);
 }
@@ -136,11 +164,14 @@ export async function syncCatalogRecords(
 export async function saveLocalCatalogOrder(
   recordIds: string[],
 ): Promise<CatalogRecord[]> {
-  const response = await fetch(`${localLibraryOrigin}/v1/catalog/order`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ recordIds }),
-  });
+  const response = await fetchLocalLibrary(
+    `${localLibraryOrigin}/v1/catalog/order`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordIds }),
+    },
+  );
   const result = await readResponse<{ records: unknown }>(response);
   return validateRecords(result.records);
 }
@@ -149,7 +180,7 @@ export async function matchLocalRecord(
   recordId: string,
   options: { trackIds?: string[]; rematch?: boolean } = {},
 ): Promise<YouTubeMatchResult> {
-  const response = await fetch(
+  const response = await fetchLocalLibrary(
     `${localLibraryOrigin}/v1/records/${encodeURIComponent(
       recordId,
     )}/youtube-match`,
@@ -169,23 +200,29 @@ export async function matchLocalRecord(
 }
 
 export async function fetchLocalSpotifyStatus(): Promise<LocalSpotifyStatus> {
-  const response = await fetch(`${localLibraryOrigin}/v1/spotify/status`, {
-    cache: "no-store",
-  });
+  const response = await fetchLocalLibrary(
+    `${localLibraryOrigin}/v1/spotify/status`,
+    {
+      cache: "no-store",
+    },
+  );
   return readResponse<LocalSpotifyStatus>(response);
 }
 
 export async function fetchLocalDownloaderStatus(): Promise<LocalDownloaderStatus> {
-  const response = await fetch(`${localLibraryOrigin}/v1/downloader/status`, {
-    cache: "no-store",
-  });
+  const response = await fetchLocalLibrary(
+    `${localLibraryOrigin}/v1/downloader/status`,
+    {
+      cache: "no-store",
+    },
+  );
   return readResponse<LocalDownloaderStatus>(response);
 }
 
 export async function importSpotifyMetadata(
   spotifyUrl: string,
 ): Promise<ImportResult> {
-  const response = await fetch(`${localLibraryOrigin}/v1/imports`, {
+  const response = await fetchLocalLibrary(`${localLibraryOrigin}/v1/imports`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ spotifyUrl }),
@@ -205,7 +242,7 @@ export async function uploadLocalTrack(
   trackId: string,
   file: File,
 ): Promise<void> {
-  const response = await fetch(
+  const response = await fetchLocalLibrary(
     `${localLibraryOrigin}/v1/records/${encodeURIComponent(
       recordId,
     )}/tracks/${encodeURIComponent(trackId)}/audio`,
@@ -227,7 +264,7 @@ export async function downloadLocalTrackFromYouTube(
   youtubeUrl: string | null,
   confirmedOwnership: boolean,
 ): Promise<CatalogRecord> {
-  const response = await fetch(
+  const response = await fetchLocalLibrary(
     `${localLibraryOrigin}/v1/records/${encodeURIComponent(
       recordId,
     )}/tracks/${encodeURIComponent(trackId)}/youtube-download`,
@@ -243,7 +280,7 @@ export async function downloadLocalTrackFromYouTube(
 }
 
 export async function removeLocalRecord(recordId: string): Promise<void> {
-  const response = await fetch(
+  const response = await fetchLocalLibrary(
     `${localLibraryOrigin}/v1/records/${encodeURIComponent(recordId)}`,
     { method: "DELETE" },
   );

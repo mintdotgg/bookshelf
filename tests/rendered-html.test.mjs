@@ -130,7 +130,7 @@ function parseWav(buffer, label) {
   return dataBytes / format.byteRate;
 }
 
-test("server-renders the Side One shell without provider branding", async () => {
+test("server-renders the Side One shell with only the requested Mint badge", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -155,6 +155,12 @@ test("server-renders the Side One shell without provider branding", async () => 
   assert.match(html, /aria-label="Vinyl audio player"/);
   assert.match(html, /Official links for every record/);
   assert.match(html, /Import music/i);
+  assert.match(html, /data-testid="made-with-mint"/);
+  assert.match(html, /aria-label="Made with Mint"/);
+  assert.match(html, /href="https:\/\/mint\.gg"/);
+  assert.match(html, /aria-label="Visit Mint"/);
+  assert.match(html, /target="_blank"/);
+  assert.match(html, /rel="noopener noreferrer"/);
 
   const { recordCatalog } = await import("../app/record-catalog.ts");
   const renderedPositions = recordCatalog.map((record) =>
@@ -176,7 +182,7 @@ test("server-renders the Side One shell without provider branding", async () => 
   assert.match(html, /630/);
   assert.doesNotMatch(
     html,
-    /\bStripe Press\b|\bmint\.gg\b|Made with Mint|mint-attribution/i,
+    /\bStripe Press\b|mint-attribution/i,
   );
   assert.doesNotMatch(
     html,
@@ -209,7 +215,10 @@ test("default development waits for the local music service", async () => {
     "node --env-file-if-exists=.env.local scripts/dev-local.mjs start",
   );
   assert.match(packageJson.scripts["start:app"], /vinext start/);
-  assert.match(launcher, /if \(await localLibraryIsReady\(\)\)/);
+  assert.match(launcher, /const currentLibrary = await inspectLocalLibrary\(\)/);
+  assert.match(launcher, /if \(currentLibrary\.ready\)/);
+  assert.match(launcher, /else if \(currentLibrary\.reachable\)/);
+  assert.match(launcher, /does not allow the required browser/);
   assert.match(launcher, /await waitForLocalLibrary\(localLibrary\)/);
   assert.match(launcher, /\[vinextCli, appCommand\]/);
   assert.ok(
@@ -2014,7 +2023,7 @@ test("guards the local yt-dlp action behind an explicit authorization", async ()
   assert.match(dialog, /!downloaderReady/);
 });
 
-test("imports music through one entry point and fills only verified audio automatically", async () => {
+test("imports music through one entry point and fills verified audio only after explicit authorization", async () => {
   const [importDialog, library] = await Promise.all([
     readFile(
       new URL("../app/LocalLibraryImport.tsx", import.meta.url),
@@ -2026,17 +2035,22 @@ test("imports music through one entry point and fills only verified audio automa
   assert.match(library, /data-testid="open-import-music"/);
   assert.doesNotMatch(library, /data-testid="open-local-audio"/);
   assert.doesNotMatch(importDialog, /data-testid="local-import-auto-audio"/);
-  assert.doesNotMatch(importDialog, /data-testid="local-import-auto-confirm"/);
-  assert.doesNotMatch(
-    importDialog,
-    /Find and save missing audio automatically/,
-  );
-  assert.doesNotMatch(
+  assert.match(importDialog, /data-testid="local-import-download-confirm"/);
+  assert.match(
     importDialog,
     /I own this media or have permission to download and keep it/,
   );
+  assert.match(importDialog, /downloaderReady && confirmedOwnership/);
+  assert.match(
+    importDialog,
+    /latestDownloaderStatus\.ready && confirmedOwnership/,
+  );
   assert.match(importDialog, /matchLocalRecord/);
   assert.match(importDialog, /downloadLocalTrackFromYouTube/);
+  assert.match(
+    importDialog,
+    /downloadLocalTrackFromYouTube\([\s\S]*?confirmedOwnership/,
+  );
   assert.match(importDialog, /track\.youtubeMatch\?\.verified === true/);
   assert.match(importDialog, /if \(automaticAudioReady\)/);
   assert.match(importDialog, /Artwork, tracklists, and selected files will still import normally/);
@@ -2052,6 +2066,26 @@ test("imports music through one entry point and fills only verified audio automa
     library,
     /engineRef\.current\?\.focusRecord\(importedRecordIndex\)/,
   );
+});
+
+test("reports blocked loopback access and rejects helpers with stale hosted origins", async () => {
+  const [client, startup, server] = await Promise.all([
+    readFile(new URL("../app/local-library.ts", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/dev-local.mjs", import.meta.url), "utf8"),
+    readFile(
+      new URL("../services/local-library/server.mjs", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(client, /targetAddressSpace: "loopback"/);
+  assert.match(client, /LOCAL_LIBRARY_UNREACHABLE/);
+  assert.match(client, /LOCAL_LIBRARY_HOSTED_ORIGINS/);
+  assert.match(startup, /inspectLocalLibrary/);
+  assert.match(startup, /Access-Control-Request-Private-Network/);
+  assert.match(startup, /does not allow the required browser/);
+  assert.match(server, /LOCAL_LIBRARY_HOSTED_ORIGINS/);
+  assert.match(server, /Hosted browser origins/);
 });
 
 test("maps each saved file back to its exact song row in the UI", async () => {

@@ -7,6 +7,7 @@ import {
   localLibraryOrigin,
 } from "./local-library";
 import type { LocalDownloaderStatus } from "./local-library";
+import { usePresence } from "./use-presence";
 
 export type YouTubeDownloadTarget = {
   recordId: string;
@@ -35,6 +36,20 @@ export function YouTubeDownloadDialog({
   const [error, setError] = useState<string | null>(null);
   const [downloaderStatus, setDownloaderStatus] =
     useState<LocalDownloaderStatus | null>(null);
+  const [presentedTarget, setPresentedTarget] =
+    useState<YouTubeDownloadTarget | null>(target);
+  const presence = usePresence(target !== null);
+
+  useEffect(() => {
+    if (!target) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setPresentedTarget(target);
+    });
+    return () => {
+      active = false;
+    };
+  }, [target]);
 
   useEffect(() => {
     if (!target) return;
@@ -50,6 +65,9 @@ export function YouTubeDownloadDialog({
     let active = true;
     queueMicrotask(() => {
       if (!active) return;
+      setYoutubeUrl("");
+      setConfirmedOwnership(false);
+      setBusy(false);
       setDownloaderStatus(null);
       setError(null);
       setStatus("Checking yt-dlp, FFmpeg, JavaScript runtime, and EJS");
@@ -94,7 +112,8 @@ export function YouTubeDownloadDialog({
     };
   }, [target]);
 
-  if (!target) return null;
+  const activeTarget = target ?? presentedTarget;
+  if (!presence.mounted || !activeTarget) return null;
   const downloaderReady = downloaderStatus?.ready === true;
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -102,18 +121,18 @@ export function YouTubeDownloadDialog({
     if (!youtubeUrl.trim() || !confirmedOwnership || busy) return;
     setBusy(true);
     setError(null);
-    setStatus(`Downloading ${target.trackTitle} with yt-dlp`);
+    setStatus(`Downloading ${activeTarget.trackTitle} with yt-dlp`);
 
     try {
       await downloadLocalTrackFromYouTube(
-        target.recordId,
-        target.trackId,
+        activeTarget.recordId,
+        activeTarget.trackId,
         youtubeUrl,
         confirmedOwnership,
       );
       await onLibraryChanged();
       setStatus(
-        `${target.trackTitle} is saved locally and ready for playback.`,
+        `${activeTarget.trackTitle} is saved locally and ready for playback.`,
       );
     } catch (caught) {
       setError(
@@ -128,16 +147,22 @@ export function YouTubeDownloadDialog({
   };
 
   return (
-    <div className="local-import" data-testid="youtube-download-overlay">
+    <div
+      className={`local-import motion-overlay is-${presence.state}`}
+      data-testid="youtube-download-overlay"
+      data-motion-state={presence.state}
+      aria-hidden={target === null}
+      inert={target ? undefined : true}
+    >
       <button
         type="button"
-        className="local-import__backdrop"
+        className="local-import__backdrop motion-backdrop"
         aria-label="Close YouTube download"
         disabled={busy}
         onClick={onClose}
       />
       <section
-        className="local-import__dialog youtube-download__dialog"
+        className="local-import__dialog youtube-download__dialog motion-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="youtube-download-title"
@@ -159,7 +184,7 @@ export function YouTubeDownloadDialog({
         </div>
 
         <p className="local-import__intro">
-          Save audio for <strong>{target.trackTitle}</strong> from one direct
+          Save audio for <strong>{activeTarget.trackTitle}</strong> from one direct
           YouTube video URL. The loopback helper runs yt-dlp and FFmpeg locally.
         </p>
 
@@ -230,7 +255,7 @@ export function YouTubeDownloadDialog({
         </form>
 
         <p className="local-import__footnote">
-          {target.recordTitle} · helper: <code>{localLibraryOrigin}</code> · no
+          {activeTarget.recordTitle} · helper: <code>{localLibraryOrigin}</code> · no
           database
         </p>
       </section>
