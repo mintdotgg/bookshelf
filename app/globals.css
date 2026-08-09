@@ -297,6 +297,7 @@ canvas:focus-visible {
   align-items: flex-start;
 }
 
+.mint-playground-link,
 .local-import-trigger,
 .settings-trigger {
   display: inline-flex;
@@ -2580,6 +2581,20 @@ input[type="range"] {
     background-color 180ms ease;
 }
 
+.mint-playground-link {
+  cursor: pointer;
+  pointer-events: auto;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.mint-playground-link > span {
+  margin-left: 6px;
+  color: var(--tan);
+  font-size: 11px;
+}
+
+.mint-playground-link:hover,
 .local-import-trigger:hover:not(:disabled),
 .settings-trigger:hover:not(:disabled) {
   background: var(--soft-hover);
@@ -3346,6 +3361,7 @@ input[type="range"] {
     gap: 0;
   }
 
+  .mint-playground-link,
   .local-import-trigger,
   .rearrange-trigger,
   .settings-trigger {

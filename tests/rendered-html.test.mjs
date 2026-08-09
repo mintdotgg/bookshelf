@@ -162,6 +162,11 @@ test("server-renders the Side One shell with only the requested Mint badge", asy
   assert.match(html, /aria-label="Visit Mint"/);
   assert.match(html, /target="_blank"/);
   assert.match(html, /rel="noopener noreferrer"/);
+  assert.match(
+    html,
+    /href="https:\/\/github\.com\/mintdotgg\/mint-playground"[^>]*>Mint Playground/,
+    "the top header links to the complete open-source Mint project list",
+  );
 
   const { recordCatalog } = await import("../app/record-catalog.ts");
   const renderedPositions = recordCatalog.map((record) =>

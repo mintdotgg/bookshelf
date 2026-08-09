@@ -1145,6 +1145,17 @@ export function VinylLibrary() {
           <span>{siteConfig.collectionName}</span>
         </div>
         <div className="archive-header__actions">
+          <a
+            className="mint-playground-link"
+            data-testid="open-mint-playground"
+            href={siteConfig.mintPlaygroundUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Explore the full list of open-source Mint projects on Mint Playground (opens in a new tab)"
+          >
+            {siteConfig.mintPlaygroundLabel}
+            <span aria-hidden="true">↗</span>
+          </a>
           <button
             ref={rearrangeTriggerRef}
             type="button"
